@@ -1,0 +1,4 @@
+CoreGameDirectory=C:\Program Files\Eagle Dynamics\DCS World
+SaveGameDirectory=%USERPROFILE%\Saved Games\DCS
+
+BackupDirectory=
