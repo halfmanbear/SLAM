@@ -27,7 +27,7 @@ SLAM (SymLink Advanced Modding) is a PowerShell-based mod management tool design
    - Add mod folders and files to `\SLAM\Games\DCS\Core Mods\` and `\SLAM\Games\DCS\Saved Games Mods\` as needed.
 
 5. **Run the Setup**:
-   - Note: If a blue SmartScreen warning appears click `More info` then `Run anyway`
+   - **Note**: If a blue SmartScreen warning appears click `More info` then `Run anyway`
    - **For Windows**: Double-click `install.bat` to create the `SLAM` desktop shortcut.
    - Use the desktop shortcut to launch SLAM with the necessary permissions.
 
