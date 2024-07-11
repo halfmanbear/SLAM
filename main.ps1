@@ -14,6 +14,28 @@ $asciiArt = @"
 
 "@
 
+# Enable long path support
+function Enable-LongPaths {
+    Write-Host "Enabling long path support..."
+    Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1
+}
+
+Enable-LongPaths
+
+# Add Windows API DeleteFile and MoveFile functions
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class WinAPI {
+    [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Auto)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool DeleteFile(string path);
+
+    [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Auto)]
+    public static extern bool MoveFile(string lpExistingFileName, string lpNewFileName);
+}
+"@
+
 # Define symbolic link creation function
 function New-SymbolicLink {
     param (
@@ -23,13 +45,19 @@ function New-SymbolicLink {
     New-Item -Path $Path -ItemType SymbolicLink -Value $Target -Force
 }
 
-# Define symbolic link removal function
+# Define symbolic link removal function using Windows API
 function Remove-SymbolicLink {
     param (
         [string]$Path
     )
     if ((Test-Path -Path $Path) -and ((Get-Item -Path $Path).Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
-        Remove-Item -Path $Path -Force
+        $result = [WinAPI]::DeleteFile($Path)
+        if ($result) {
+            Write-Host "Successfully removed symbolic link: $Path"
+        } else {
+            $errorMessage = [System.ComponentModel.Win32Exception]::new([System.Runtime.InteropServices.Marshal]::GetLastWin32Error()).Message
+            Write-Host "Failed to remove symbolic link: $errorMessage"
+        }
     }
 }
 
@@ -44,6 +72,23 @@ function Remove-EmptyDirectories {
             Remove-Item -LiteralPath $_.FullName -Recurse -Force
             Write-Host "Removed empty directory: $_.FullName"
         }
+    }
+}
+
+# Define a function to move files using the Windows API
+function Move-File-With-Metadata {
+    param (
+        [string]$SourcePath,
+        [string]$DestinationPath
+    )
+
+    if ([WinAPI]::MoveFile($SourcePath, $DestinationPath)) {
+        Write-Host "Successfully moved $SourcePath to $DestinationPath with metadata updates."
+        return $true
+    } else {
+        $errorMessage = [System.ComponentModel.Win32Exception]::new([System.Runtime.InteropServices.Marshal]::GetLastWin32Error()).Message
+        Write-Host "Failed to move file: $errorMessage"
+        return $false
     }
 }
 
@@ -69,23 +114,23 @@ function Install-Mod {
             [string]$TargetPath
         )
 
-        Get-ChildItem -Path $SourcePath -Recurse -File | ForEach-Object {
+        Get-ChildItem -LiteralPath $SourcePath -Recurse -File | ForEach-Object {
             $relativePath = $_.FullName.Substring($SourcePath.Length).TrimStart("\")
             $targetFilePath = Join-Path -Path $TargetPath -ChildPath $relativePath
             $backupFilePath = Join-Path -Path $backupDir -ChildPath $relativePath
 
-            if (Test-Path -Path $targetFilePath) {
+            if (Test-Path -LiteralPath $targetFilePath) {
                 $backupNeeded = $true
 
                 # Create necessary directories in backup path
-                $backupDirPath = Split-Path -Path $backupFilePath -Parent
-                if (-not (Test-Path -Path $backupDirPath)) {
+                $backupDirPath = [System.IO.Path]::GetDirectoryName($backupFilePath)
+                if (-not (Test-Path -LiteralPath $backupDirPath)) {
                     New-Item -ItemType Directory -Path $backupDirPath -Force
                 }
 
                 # If target is a symbolic link, prompt the user for action
-                if ((Get-Item -Path $targetFilePath).Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
-                    $currentTarget = (Get-Item -Path $targetFilePath).Target
+                if ((Get-Item -LiteralPath $targetFilePath).Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+                    $currentTarget = (Get-Item -LiteralPath $targetFilePath).Target
                     Write-Host "Conflict: $targetFilePath is already linked to $currentTarget"
                     $choice = Read-Host "Do you want to replace the existing link? (Enter 'yes' to replace or 'no' to keep the existing link) [default: yes]"
                     if ($choice -eq 'no' -or $choice -eq 'n') {
@@ -94,14 +139,22 @@ function Install-Mod {
                 }
 
                 # Backup the existing file
-                Copy-Item -Path $targetFilePath -Destination $backupFilePath -Force
-                # Remove the existing file
-                Remove-Item -Path $targetFilePath -Force
+                $moveSuccess = Move-File-With-Metadata -SourcePath $targetFilePath -DestinationPath $backupFilePath
+                if ($moveSuccess) {
+                    Write-Host "File moved successfully: $targetFilePath"
+                } else {
+                    Write-Host "Failed to move file: $targetFilePath"
+                }
+
+                # Remove the existing file if it was successfully moved
+                if (Test-Path -LiteralPath $targetFilePath) {
+                    Remove-Item -LiteralPath $targetFilePath -Force
+                }
             }
 
             # Create necessary directories in target path
-            $targetDir = Split-Path -Path $targetFilePath -Parent
-            if (-not (Test-Path -Path $targetDir)) {
+            $targetDir = [System.IO.Path]::GetDirectoryName($targetFilePath)
+            if (-not (Test-Path -LiteralPath $targetDir)) {
                 New-Item -ItemType Directory -Path $targetDir -Force
             }
 
@@ -115,7 +168,7 @@ function Install-Mod {
     Copy-And-Link -SourcePath $ModSourcePath -TargetPath $GameDirectory
 
     # Create the backup directory if needed
-    if ($backupNeeded -and -not (Test-Path -Path $backupDir)) {
+    if ($backupNeeded -and -not (Test-Path -LiteralPath $backupDir)) {
         New-Item -ItemType Directory -Path $backupDir
     }
 
@@ -135,8 +188,8 @@ function Uninstall-Mod {
     $backupDir = Join-Path -Path $BackupDirectory -ChildPath ("Backup-" + $ModName)
 
     # Restore backup if it exists
-    if (Test-Path -Path $backupDir) {
-        Get-ChildItem -Path $backupDir -Recurse -File | ForEach-Object {
+    if (Test-Path -LiteralPath $backupDir) {
+        Get-ChildItem -LiteralPath $backupDir -Recurse -File | ForEach-Object {
             $relativePath = $_.FullName.Substring($backupDir.Length).TrimStart("\")
             $targetFilePath = Join-Path -Path $GameDirectory -ChildPath $relativePath
 
@@ -144,13 +197,13 @@ function Uninstall-Mod {
             Remove-SymbolicLink -Path $targetFilePath
 
             # Create necessary directories in target path
-            $targetDir = Split-Path -Path $targetFilePath -Parent
-            if (-not (Test-Path -Path $targetDir)) {
+            $targetDir = [System.IO.Path]::GetDirectoryName($targetFilePath)
+            if (-not (Test-Path -LiteralPath $targetDir)) {
                 New-Item -ItemType Directory -Path $targetDir -Force
             }
 
             # Restore the backup file
-            Copy-Item -Path $_.FullName -Destination $targetFilePath -Force
+            Copy-Item -LiteralPath $_.FullName -Destination $targetFilePath -Force
             Write-Host "Restored: $targetFilePath"
         }
 
@@ -160,7 +213,7 @@ function Uninstall-Mod {
         # No backup found, remove the symbolic links directly
         Write-Host "No backup found for mod: $ModName, removing symbolic links directly."
 
-        Get-ChildItem -Path $ModSourcePath -Recurse -File | ForEach-Object {
+        Get-ChildItem -LiteralPath $ModSourcePath -Recurse -File | ForEach-Object {
             $relativePath = $_.FullName.Substring($ModSourcePath.Length).TrimStart("\")
             $targetFilePath = Join-Path -Path $GameDirectory -ChildPath $relativePath
 
@@ -180,7 +233,7 @@ function List-Mods {
     param (
         [string]$GameDirectory
     )
-    Get-ChildItem -Path $GameDirectory -Recurse | Where-Object {
+    Get-ChildItem -LiteralPath $GameDirectory -Recurse | Where-Object {
         $_.Attributes -band [System.IO.FileAttributes]::ReparsePoint
     } | ForEach-Object {
         Write-Host $_.Name
@@ -193,8 +246,8 @@ function Read-Config {
         [string]$ConfigFilePath
     )
     $config = @{}
-    if (Test-Path -Path $ConfigFilePath) {
-        Get-Content -Path $ConfigFilePath | ForEach-Object {
+    if (Test-Path -LiteralPath $ConfigFilePath) {
+        Get-Content -LiteralPath $ConfigFilePath | ForEach-Object {
             $_ = $_.Trim()
             if ($_.Length -gt 0 -and $_.Substring(0, 1) -ne '#') {
                 $parts = $_ -split '='
@@ -217,7 +270,7 @@ function Select-Game {
     Clear-Host
     Write-Host $asciiArt -ForegroundColor Blue
     $gamesPath = Join-Path -Path $BasePath -ChildPath 'Games'
-    $games = Get-ChildItem -Path $gamesPath -Directory
+    $games = Get-ChildItem -LiteralPath $gamesPath -Directory
 
     Write-Host "Available games:" -ForegroundColor Cyan
     for ($i = 0; $i -lt $games.Count; $i++) {
@@ -275,11 +328,11 @@ function Is-Mod-Installed {
         [string]$GameDirectory
     )
 
-    $sampleFile = Get-ChildItem -Path $ModPath -Recurse -File | Select-Object -First 1
+    $sampleFile = Get-ChildItem -LiteralPath $ModPath -Recurse -File | Select-Object -First 1
     if ($sampleFile) {
         $relativePath = $sampleFile.FullName.Substring($ModPath.Length).TrimStart("\")
         $linkPath = Join-Path -Path $GameDirectory -ChildPath $relativePath
-        return (Test-Path -Path $linkPath) -and ((Get-Item -Path $linkPath).Attributes -band [System.IO.FileAttributes]::ReparsePoint)
+        return (Test-Path -LiteralPath $linkPath) -and ((Get-Item -LiteralPath $linkPath).Attributes -band [System.IO.FileAttributes]::ReparsePoint)
     }
     return $false
 }
@@ -292,7 +345,7 @@ function Select-Mod {
     )
     Clear-Host
     Write-Host $asciiArt -ForegroundColor Blue
-    $mods = Get-ChildItem -Path $modParentPath -Directory | Where-Object { $_.Name -notmatch '^Backup-' }
+    $mods = Get-ChildItem -LiteralPath $modParentPath -Directory | Where-Object { $_.Name -notmatch '^Backup-' }
     $modList = @()
 
     foreach ($mod in $mods) {
