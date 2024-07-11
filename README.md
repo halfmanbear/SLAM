@@ -1,4 +1,21 @@
-# SLAM - SymLink Advanced Mod-manager for DCS
+<p align="center">
+  <img src="images/logo.png" width="350" alt="SLAM Logo">
+  <h1 align="center">SLAM</h1>
+  <h1 align="center">SymLink Advanced Mod-manager for DCS</h1>
+</p>
+
+---
+
+<div align="center">
+
+| 📥 Download | ⚙️ Installation |
+|---------------------------------------------|---------------------------------------------|
+| [Releases](https://github.com/halfmanbear/SLAM/releases/) | [Wiki](https://github.com/halfmanbear/SLAM/wiki) |
+
+</div>
+
+
+---
 
 ## Overview
 
@@ -13,39 +30,6 @@ SLAM (SymLink Advanced Mod-manager) is a PowerShell-based mod management tool de
 - **Persistent Mod Files:** Uses symbolic links to ensure any edits made in-game are directly reflected and retained in the mod files.
 - **Simple Configuration:** Uses a single `config.txt` file to specify the game install location.
 - **User-Friendly Interface:** Command-line interface guides you through selecting games and mods.
-
-## Installation
-
-1. **Download the Release ZIP**: Found here [Releases](https://github.com/halfmanbear/SLAM/releases)
-
-2. **Extract the ZIP**: Extract the `SLAM` folder to your desired Mod Files location.
-
-3. **Configure DCS Install Location**:
-   - Open `\SLAM\config.txt` and edit `CoreGameDirectory=` and `SavedGamesDirectory=` paths if needed. The default is 'Release'.
-
-4. **Add Mod Folders**:
-   - Add mod folders and files to `\SLAM\Games\DCS\Core Mods\` and `\SLAM\Games\DCS\Saved Games Mods\` as needed.
-
-5. **Run the Setup**:
-   - **Note**: If a blue SmartScreen warning appears click `More info` then `Run anyway`
-   - **For Windows**: Double-click `install.bat` to create the `SLAM` desktop shortcut.
-   - Use the desktop shortcut to launch SLAM with the necessary permissions.
-
-## Using SLAM
-
-1. **Run SLAM**: Use the desktop shortcut created during the installation to run `SLAM`.
-
-2. **Select Game**: Choose `DCS`.
-
-3. **Select Mod Destination**: Select either `Core Mods` or `Saved Game Mods`.
-
-4. **View Your Mods**: You will now see all mods located in the respective `Core Mods` or `Saved Game Mods` folders.
-
-5. **Manage Mods**: Select a mod to toggle installation or uninstallation. Enabled mods will be marked with an `*` and displayed in `green`.
-
-6. **Original Game File Backups**: Original game file backups are automatically stored in `\SLAM\Games\DCS\Backup` by default. Note: Some mods may not replace original game files, so no Backup folder will be created.
-
-Thank you for using SLAM! If you encounter any issues or have feedback, please visit our [GitHub Issues page](https://github.com/halfmanbear/SLAM/issues).
 
 ## Contributing
 
