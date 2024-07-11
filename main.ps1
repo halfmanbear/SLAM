@@ -1,3 +1,19 @@
+# ASCII Art
+$asciiArt = @"
+############################################################
+#   ________  ___            __       ___      ___         #
+#  /"       )|"  |          /""\     |"  \    /"  |        #
+# (:   \___/ ||  |         /    \     \   \  //   |        #
+#  \___  \   |:  |        /' /\  \    /\\  \/.    |        #
+#   __/  \\   \  |___    //  __'  \  |: \.        |        #
+#  /" \   :) ( \_|:  \  /   /  \\  \ |.  \    /:  |        #
+# (_______/   \_______)(___/    \___)|___|\__/|___|        #
+#                                                          #
+#       - SymLink Advanced Modding for DCS -               #
+############################################################
+
+"@
+
 # Define symbolic link creation function
 function New-SymbolicLink {
     param (
@@ -24,8 +40,8 @@ function Remove-EmptyDirectories {
     )
 
     Get-ChildItem -Path $RootPath -Recurse -Directory | Sort-Object FullName -Descending | ForEach-Object {
-        if (-not (Get-ChildItem -Path $_.FullName)) {
-            Remove-Item -Path $_.FullName -Recurse -Force
+        if (-not (Get-ChildItem -LiteralPath $_.FullName)) {
+            Remove-Item -LiteralPath $_.FullName -Recurse -Force
             Write-Host "Removed empty directory: $_.FullName"
         }
     }
@@ -36,13 +52,12 @@ function Install-Mod {
     param (
         [string]$ModName,
         [string]$ModSourcePath,
-        [string]$GameDirectory
+        [string]$GameDirectory,
+        [string]$BackupDirectory
     )
 
-    # Extract the last directory name from ModSourcePath to use in backup directory name
-    $modSourceDirName = Split-Path -Path $ModSourcePath -Leaf
-    $backupDirParent = Split-Path -Path $ModSourcePath -Parent
-    $backupDir = Join-Path -Path $backupDirParent -ChildPath "Backup-$modSourceDirName"
+    # Define the backup directory using the user-configurable path
+    $backupDir = Join-Path -Path $BackupDirectory -ChildPath ("Backup-" + $ModName)
 
     # Create backup directory only if needed
     $backupNeeded = $false
@@ -72,8 +87,8 @@ function Install-Mod {
                 if ((Get-Item -Path $targetFilePath).Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
                     $currentTarget = (Get-Item -Path $targetFilePath).Target
                     Write-Host "Conflict: $targetFilePath is already linked to $currentTarget"
-                    $choice = Read-Host "Do you want to replace the existing link? (Enter 'yes' to replace or 'no' to keep the existing link)"
-                    if ($choice -ne 'yes') {
+                    $choice = Read-Host "Do you want to replace the existing link? (Enter 'yes' to replace or 'no' to keep the existing link) [default: yes]"
+                    if ($choice -eq 'no' -or $choice -eq 'n') {
                         return
                     }
                 }
@@ -112,13 +127,12 @@ function Uninstall-Mod {
     param (
         [string]$ModName,
         [string]$ModSourcePath,
-        [string]$GameDirectory
+        [string]$GameDirectory,
+        [string]$BackupDirectory
     )
 
-    # Extract the last directory name from ModSourcePath to use in backup directory name
-    $modSourceDirName = Split-Path -Path $ModSourcePath -Leaf
-    $backupDirParent = Split-Path -Path $ModSourcePath -Parent
-    $backupDir = Join-Path -Path $backupDirParent -ChildPath "Backup-$modSourceDirName"
+    # Define the backup directory using the user-configurable path
+    $backupDir = Join-Path -Path $BackupDirectory -ChildPath ("Backup-" + $ModName)
 
     # Restore backup if it exists
     if (Test-Path -Path $backupDir) {
@@ -141,7 +155,7 @@ function Uninstall-Mod {
         }
 
         # Remove the backup directory
-        Remove-Item -Path $backupDir -Recurse -Force
+        Remove-Item -LiteralPath $backupDir -Recurse -Force
     } else {
         # No backup found, remove the symbolic links directly
         Write-Host "No backup found for mod: $ModName, removing symbolic links directly."
@@ -181,9 +195,12 @@ function Read-Config {
     $config = @{}
     if (Test-Path -Path $ConfigFilePath) {
         Get-Content -Path $ConfigFilePath | ForEach-Object {
-            $parts = $_ -split '='
-            if ($parts.Length -eq 2) {
-                $config[$parts[0].Trim()] = $parts[1].Trim() -replace "%USERPROFILE%", $env:USERPROFILE
+            $_ = $_.Trim()
+            if ($_.Length -gt 0 -and $_.Substring(0, 1) -ne '#') {
+                $parts = $_ -split '='
+                if ($parts.Length -eq 2) {
+                    $config[$parts[0].Trim()] = $parts[1].Trim() -replace "%USERPROFILE%", $env:USERPROFILE
+                }
             }
         }
     } else {
@@ -197,41 +214,57 @@ function Select-Game {
     param (
         [string]$BasePath
     )
+    Clear-Host
+    Write-Host $asciiArt -ForegroundColor Blue
     $gamesPath = Join-Path -Path $BasePath -ChildPath 'Games'
     $games = Get-ChildItem -Path $gamesPath -Directory
 
-    Write-Host "Available games:"
+    Write-Host "Available games:" -ForegroundColor Cyan
     for ($i = 0; $i -lt $games.Count; $i++) {
         Write-Host "$($i + 1). $($games[$i].Name)"
     }
+    Write-Host ""
+    Write-Host "q. Quit" -ForegroundColor Red
 
-    $selectedGameIndex = [int](Read-Host "Enter the number corresponding to the game")
+    $selectedGameIndex = Read-Host "Enter the number corresponding to the game or 'q' to quit"
+    if ($selectedGameIndex -eq 'q') {
+        exit
+    }
+    $selectedGameIndex = [int]$selectedGameIndex
     if ($selectedGameIndex -gt 0 -and $selectedGameIndex -le $games.Count) {
         return $games[$selectedGameIndex - 1].FullName
     } else {
-        Write-Host "Invalid selection. Exiting."
-        exit
+        Write-Host "Invalid selection. Try Again." -ForegroundColor Red
+        return Select-Game -BasePath $BasePath
     }
 }
 
-# Let the user select a mod parent directory (Core Mods or Save Game Mods)
+# Let the user select a mod parent directory (Core Mods or Saved Games Mods)
 function Select-ModParent {
     param (
         [string]$gamePath
     )
-    $modParents = @("Core Mods", "Save Game Mods")
+    Clear-Host
+    Write-Host $asciiArt -ForegroundColor Blue
+    $modParents = @("Core Mods", "Saved Games Mods")
 
-    Write-Host "Available mod parent directories:"
+    Write-Host "Available mod parent directories:" -ForegroundColor Cyan
     for ($i = 0; $i -lt $modParents.Count; $i++) {
         Write-Host "$($i + 1). $($modParents[$i])"
     }
+    Write-Host ""
+    Write-Host "b. Back" -ForegroundColor Yellow
 
-    $selectedModParentIndex = [int](Read-Host "Enter the number corresponding to the mod parent directory")
+    $selectedModParentIndex = Read-Host "Enter the number corresponding to the mod parent directory or 'b' to go back"
+    if ($selectedModParentIndex -eq 'b') {
+        return 'back'
+    }
+    $selectedModParentIndex = [int]$selectedModParentIndex
     if ($selectedModParentIndex -gt 0 -and $selectedModParentIndex -le $modParents.Count) {
         return Join-Path -Path $gamePath -ChildPath $modParents[$selectedModParentIndex - 1]
     } else {
-        Write-Host "Invalid selection. Exiting."
-        exit
+        Write-Host "Invalid selection. Try Again." -ForegroundColor Red
+        return Select-ModParent -gamePath $gamePath
     }
 }
 
@@ -257,6 +290,8 @@ function Select-Mod {
         [string]$modParentPath,
         [string]$gameDirectory
     )
+    Clear-Host
+    Write-Host $asciiArt -ForegroundColor Blue
     $mods = Get-ChildItem -Path $modParentPath -Directory | Where-Object { $_.Name -notmatch '^Backup-' }
     $modList = @()
 
@@ -264,21 +299,26 @@ function Select-Mod {
         $modName = $mod.Name
         if (Is-Mod-Installed -ModPath $mod.FullName -GameDirectory $gameDirectory) {
             $modName = "* " + $modName
+            Write-Host "$($modList.Count + 1). $modName" -ForegroundColor Green
+        } else {
+            Write-Host "$($modList.Count + 1). $modName"
         }
         $modList += $modName
     }
 
-    Write-Host "Available mods:"
-    for ($i = 0; $i -lt $modList.Count; $i++) {
-        Write-Host "$($i + 1). $($modList[$i])"
-    }
+    Write-Host ""
+    Write-Host "b. Back" -ForegroundColor Yellow
 
-    $selectedModIndex = [int](Read-Host "Enter the number corresponding to the mod")
+    $selectedModIndex = Read-Host "Enter the number corresponding to the mod or 'b' to go back"
+    if ($selectedModIndex -eq 'b') {
+        return 'back'
+    }
+    $selectedModIndex = [int]$selectedModIndex
     if ($selectedModIndex -gt 0 -and $selectedModIndex -le $modList.Count) {
         return $mods[$selectedModIndex - 1].FullName
     } else {
-        Write-Host "Invalid selection. Exiting."
-        exit
+        Write-Host "Invalid selection. Try Again." -ForegroundColor Red
+        return Select-Mod -modParentPath $modParentPath -gameDirectory $gameDirectory
     }
 }
 
@@ -296,34 +336,49 @@ if (-not $config.ContainsKey('CoreGameDirectory') -or [string]::IsNullOrEmpty($c
     Write-Host "CoreGameDirectory not found in config file. Exiting."
     exit
 }
-if (-not $config.ContainsKey('SaveGameDirectory') -or [string]::IsNullOrEmpty($config['SaveGameDirectory'])) {
-    Write-Host "SaveGameDirectory not found in config file. Exiting."
+if (-not $config.ContainsKey('SavedGamesDirectory') -or [string]::IsNullOrEmpty($config['SavedGamesDirectory'])) {
+    Write-Host "SavedGamesDirectory not found in config file. Exiting."
     exit
 }
 
 while ($true) {
     $gamePath = Select-Game -BasePath $scriptDir
+    $selectedGameName = Split-Path -Path $gamePath -Leaf
     $modParentPath = Select-ModParent -gamePath $gamePath
+
+    if ($modParentPath -eq 'back') {
+        continue
+    }
 
     if ($modParentPath -like "*Core Mods*") {
         $gameDirectory = $config['CoreGameDirectory']
-    } elseif ($modParentPath -like "*Save Game Mods*") {
-        $gameDirectory = $config['SaveGameDirectory']
+    } elseif ($modParentPath -like "*Saved Games Mods*") {
+        $gameDirectory = $config['SavedGamesDirectory']
     } else {
-        Write-Host "Invalid mod parent directory. Exiting."
-        exit
+        Write-Host "Invalid mod parent directory. Try Again." -ForegroundColor Red
+        continue
     }
 
-    $modPath = Select-Mod -modParentPath $modParentPath -gameDirectory $gameDirectory
+    while ($true) {
+        $modPath = Select-Mod -modParentPath $modParentPath -gameDirectory $gameDirectory
 
-    # Determine if the mod is currently installed
-    $modName = Split-Path -Path $modPath -Leaf
-    $modInstalled = Is-Mod-Installed -ModPath $modPath -GameDirectory $gameDirectory
+        if ($modPath -eq 'back') {
+            break
+        }
 
-    # Toggle mod installation state
-    if ($modInstalled) {
-        Uninstall-Mod -ModName $modName -ModSourcePath $modPath -GameDirectory $gameDirectory
-    } else {
-        Install-Mod -ModName $modName -ModSourcePath $modPath -GameDirectory $gameDirectory
+        # Determine if the mod is currently installed
+        $modName = Split-Path -Path $modPath -Leaf
+        $backupDirectory = Join-Path -Path $gamePath -ChildPath "Backup"
+        $modInstalled = Is-Mod-Installed -ModPath $modPath -GameDirectory $gameDirectory
+
+        # Toggle mod installation state
+        if ($modInstalled) {
+            Uninstall-Mod -ModName $modName -ModSourcePath $modPath -GameDirectory $gameDirectory -BackupDirectory $backupDirectory
+        } else {
+            Install-Mod -ModName $modName -ModSourcePath $modPath -GameDirectory $gameDirectory -BackupDirectory $backupDirectory
+        }
+
+        Write-Host "Press any key to return to the mod selection menu..."
+        [void][System.Console]::ReadKey($true)
     }
 }
