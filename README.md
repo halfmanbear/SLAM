@@ -21,6 +21,15 @@
 
 SLAM (SymLink Advanced Mod-manager) is a PowerShell-based mod management tool designed for DCS (Digital Combat Simulator) World. It leverages symbolic links to manage mods more efficiently, providing a seamless way to install, uninstall, and toggle mods without the need to move files around. This ensures that your original mod files remain untouched, and any changes made in-game are directly reflected in the linked files.
 
+---
+
+<div style="text-align: center;">
+  <img src="images/SLAM-menu1.png" width="450" alt="SLAM Page 1" style="margin-right: 10px;">
+  <img src="images/SLAM-menu2.png" width="450" alt="SLAM Page 2">
+</div>
+
+---
+
 ## Features
 
 - **Space Saving:** Symbolic links create a direct reference to the mod files, reducing disk space usage and improving performance.
