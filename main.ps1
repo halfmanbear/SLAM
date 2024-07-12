@@ -187,38 +187,63 @@ function Uninstall-Mod {
     # Define the backup directory using the user-configurable path
     $backupDir = Join-Path -Path $BackupDirectory -ChildPath ("Backup-" + $ModName)
 
-    # Restore backup if it exists
-    if (Test-Path -LiteralPath $backupDir) {
-        Get-ChildItem -LiteralPath $backupDir -Recurse -File | ForEach-Object {
-            $relativePath = $_.FullName.Substring($backupDir.Length).TrimStart("\")
-            $targetFilePath = Join-Path -Path $GameDirectory -ChildPath $relativePath
+    # Function to restore backup if it exists
+    function Restore-Backup {
+        if (Test-Path -LiteralPath $backupDir) {
+            $files = Get-ChildItem -LiteralPath $backupDir -Recurse -File
+            foreach ($file in $files) {
+                $relativePath = $file.FullName.Substring($backupDir.Length).TrimStart("\")
+                $targetFilePath = Join-Path -Path $GameDirectory -ChildPath $relativePath
 
-            # Remove the symbolic link if it exists
-            Remove-SymbolicLink -Path $targetFilePath
+                # Remove the symbolic link if it exists
+                Remove-SymbolicLink -Path $targetFilePath
 
-            # Create necessary directories in target path
-            $targetDir = [System.IO.Path]::GetDirectoryName($targetFilePath)
-            if (-not (Test-Path -LiteralPath $targetDir)) {
-                New-Item -ItemType Directory -Path $targetDir -Force
+                # Create necessary directories in target path
+                $targetDir = [System.IO.Path]::GetDirectoryName($targetFilePath)
+                if (-not (Test-Path -LiteralPath $targetDir)) {
+                    New-Item -ItemType Directory -Path $targetDir -Force
+                }
+
+                # Restore the backup file
+                Move-File-With-Metadata -SourcePath $file.FullName -DestinationPath $targetFilePath
+                Write-Host "Restored: $targetFilePath"
             }
 
-            # Restore the backup file
-            Copy-Item -LiteralPath $_.FullName -Destination $targetFilePath -Force
-            Write-Host "Restored: $targetFilePath"
+            # Remove the backup directory
+            Remove-Item -LiteralPath $backupDir -Recurse -Force
+        } else {
+            Write-Host "No backup found for mod: $ModName, removing symbolic links directly."
+            Remove-Links-Directly
         }
+    }
 
-        # Remove the backup directory
-        Remove-Item -LiteralPath $backupDir -Recurse -Force
-    } else {
-        # No backup found, remove the symbolic links directly
-        Write-Host "No backup found for mod: $ModName, removing symbolic links directly."
+    # Function to remove links directly when no backup is found
+    function Remove-Links-Directly {
+        $symlinkPaths = Get-ChildItem -Recurse -Force -LiteralPath $GameDirectory | Where-Object { $_.Attributes -band [System.IO.FileAttributes]::ReparsePoint } | Select-Object -ExpandProperty FullName
 
-        Get-ChildItem -LiteralPath $ModSourcePath -Recurse -File | ForEach-Object {
-            $relativePath = $_.FullName.Substring($ModSourcePath.Length).TrimStart("\")
-            $targetFilePath = Join-Path -Path $GameDirectory -ChildPath $relativePath
+        foreach ($symlinkPath in $symlinkPaths) {
+            $relativePath = $symlinkPath.Substring($GameDirectory.Length).TrimStart("\")
+            $sourceFilePath = Join-Path -Path $ModSourcePath -ChildPath $relativePath
 
+            if (Test-Path -LiteralPath $sourceFilePath) {
+                # Remove the symbolic link if it exists
+                Remove-SymbolicLink -Path $symlinkPath
+            }
+        }
+    }
+
+    # Attempt to restore backup
+    Restore-Backup
+
+    # Verify and re-remove any remaining symlinks
+    $remainingSymlinks = Get-ChildItem -Recurse -Force -LiteralPath $GameDirectory | Where-Object { $_.Attributes -band [System.IO.FileAttributes]::ReparsePoint } | Select-Object -ExpandProperty FullName
+    foreach ($symlink in $remainingSymlinks) {
+        $relativePath = $symlink.Substring($GameDirectory.Length).TrimStart("\")
+        $sourceFilePath = Join-Path -Path $ModSourcePath -ChildPath $relativePath
+
+        if (Test-Path -LiteralPath $sourceFilePath) {
             # Remove the symbolic link if it exists
-            Remove-SymbolicLink -Path $targetFilePath
+            Remove-SymbolicLink -Path $symlink
         }
     }
 
