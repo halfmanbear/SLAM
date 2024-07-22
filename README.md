@@ -40,6 +40,14 @@ SLAM (SymLink Advanced Mod-manager) is a PowerShell-based mod management tool de
 - **Simple Configuration:** Uses a single `config.txt` file to specify the game install location.
 - **User-Friendly Interface:** Command-line interface guides you through selecting games and mods.
 
+---
+
+## Installation Video
+
+[![SLAM](https://img.youtube.com/vi/vYdIOOG0fUM/0.jpg)](https://www.youtube.com/watch?v=vYdIOOG0fUM "SymLink Advanced Mod-manager (SLAM) for DCS")
+
+---
+
 ## Contributing
 
 We welcome contributions to SLAM. Please feel free to submit issues, fork the repository, and create pull requests.  
