@@ -428,41 +428,42 @@ if (-not $config.ContainsKey('SavedGamesDirectory') -or [string]::IsNullOrEmpty(
 while ($true) {
     $gamePath = Select-Game -BasePath $scriptDir
     $selectedGameName = Split-Path -Path $gamePath -Leaf
-    $modParentPath = Select-ModParent -gamePath $gamePath
-
-    if ($modParentPath -eq 'back') {
-        continue
-    }
-
-    if ($modParentPath -like "*Core Mods*") {
-        $gameDirectory = $config['CoreGameDirectory']
-    } elseif ($modParentPath -like "*Saved Games Mods*") {
-        $gameDirectory = $config['SavedGamesDirectory']
-    } else {
-        Write-Host "Invalid mod parent directory. Try Again." -ForegroundColor Red
-        continue
-    }
-
+    
     while ($true) {
-        $modPath = Select-Mod -modParentPath $modParentPath -gameDirectory $gameDirectory
-
-        if ($modPath -eq 'back') {
-            break
+        $modParentPath = Select-ModParent -gamePath $gamePath
+        if ($modParentPath -eq 'back') {
+            break  # Go back to the game selection menu
         }
-
-        # Determine if the mod is currently installed
-        $modName = Split-Path -Path $modPath -Leaf
-        $backupDirectory = Join-Path -Path $gamePath -ChildPath "Backup"
-        $modInstalled = Is-Mod-Installed -ModPath $modPath -GameDirectory $gameDirectory
-
-        # Toggle mod installation state
-        if ($modInstalled) {
-            Uninstall-Mod -ModName $modName -ModSourcePath $modPath -GameDirectory $gameDirectory -BackupDirectory $backupDirectory
+        
+        if ($modParentPath -like "*Core Mods*") {
+            $gameDirectory = $config['CoreGameDirectory']
+        } elseif ($modParentPath -like "*Saved Games Mods*") {
+            $gameDirectory = $config['SavedGamesDirectory']
         } else {
-            Install-Mod -ModName $modName -ModSourcePath $modPath -GameDirectory $gameDirectory -BackupDirectory $backupDirectory
+            Write-Host "Invalid mod parent directory. Try Again." -ForegroundColor Red
+            continue
         }
-
-        Write-Host "Press any key to return to the mod selection menu..."
-        [void][System.Console]::ReadKey($true)
+        
+        while ($true) {
+            $modPath = Select-Mod -modParentPath $modParentPath -gameDirectory $gameDirectory
+            if ($modPath -eq 'back') {
+                break  # Exit to mod parent selection menu
+            }
+            
+            # Determine if the mod is currently installed
+            $modName = Split-Path -Path $modPath -Leaf
+            $backupDirectory = Join-Path -Path $gamePath -ChildPath "Backup"
+            $modInstalled = Is-Mod-Installed -ModPath $modPath -GameDirectory $gameDirectory
+            
+            # Toggle mod installation state
+            if ($modInstalled) {
+                Uninstall-Mod -ModName $modName -ModSourcePath $modPath -GameDirectory $gameDirectory -BackupDirectory $backupDirectory
+            } else {
+                Install-Mod -ModName $modName -ModSourcePath $modPath -GameDirectory $gameDirectory -BackupDirectory $backupDirectory
+            }
+            Write-Host "Press any key to return to the mod selection menu..."
+            [void][System.Console]::ReadKey($true)
+        }
     }
 }
+
