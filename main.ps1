@@ -346,7 +346,7 @@ function Select-ModParent {
     }
 }
 
-# Check if mod is installed by looking for a specific symbolic link
+# Check if mod is installed
 function Is-Mod-Installed {
     param (
         [string]$ModPath,
@@ -357,7 +357,13 @@ function Is-Mod-Installed {
     if ($sampleFile) {
         $relativePath = $sampleFile.FullName.Substring($ModPath.Length).TrimStart("\")
         $linkPath = Join-Path -Path $GameDirectory -ChildPath $relativePath
-        return (Test-Path -LiteralPath $linkPath) -and ((Get-Item -LiteralPath $linkPath).Attributes -band [System.IO.FileAttributes]::ReparsePoint)
+        if (Test-Path -LiteralPath $linkPath) {
+            $linkItem = Get-Item -LiteralPath $linkPath
+            if ($linkItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+                $targetPath = (Get-Item $linkItem.FullName -Force).Target
+                return $targetPath.StartsWith($ModPath)
+            }
+        }
     }
     return $false
 }
