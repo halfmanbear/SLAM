@@ -36,7 +36,7 @@ try {
 
     # Set the shortcut properties
     $Shortcut.TargetPath = "powershell.exe"
-    $Shortcut.Arguments = "-ExecutionPolicy Bypass -NoExit -Command `"Start-Process PowerShell -ArgumentList '-ExecutionPolicy Bypass -NoExit -File `"`"$mainScript`"`"' -Verb RunAs`""
+    $Shortcut.Arguments = "-ExecutionPolicy Bypass -NoExit -Command `"Start-Process PowerShell -ArgumentList '-ExecutionPolicy Bypass -NoExit -File `"`"$mainScript`"`"' -Verb RunAs; exit`""
     $Shortcut.WorkingDirectory = $scriptDir
     $Shortcut.IconLocation = $iconPath
 
