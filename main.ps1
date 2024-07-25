@@ -306,7 +306,7 @@ function Select-Game {
 
     $selectedGameIndex = Read-Host "Enter the number corresponding to the game or 'q' to quit"
     if ($selectedGameIndex -eq 'q') {
-        exit
+        Stop-Process -Id $PID
     }
     $selectedGameIndex = [int]$selectedGameIndex
     if ($selectedGameIndex -gt 0 -and $selectedGameIndex -le $games.Count) {
