@@ -1,0 +1,5 @@
+# Ignore config.txt to protect user settings
+config.txt
+
+# Ignore all content in the Games directory
+/Games/*
