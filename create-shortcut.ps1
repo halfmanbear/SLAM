@@ -34,9 +34,10 @@ try {
     $WshShell = New-Object -ComObject WScript.Shell
     $Shortcut = $WshShell.CreateShortcut($desktopPath)
 
-    # Set the shortcut properties
-    $Shortcut.TargetPath = "powershell.exe"
-    $Shortcut.Arguments = "-ExecutionPolicy Bypass -NoExit -Command `"Start-Process PowerShell -ArgumentList '-ExecutionPolicy Bypass -NoExit -File `"`"$mainScript`"`"' -Verb RunAs; exit`""
+    # Set the shortcut properties to point to pwsh.exe (PowerShell 7)
+    $pwshPath = "C:\Program Files\PowerShell\7\pwsh.exe"
+    $Shortcut.TargetPath = $pwshPath
+    $Shortcut.Arguments = "-ExecutionPolicy Bypass -NoExit -Command `"Start-Process pwsh -ArgumentList '-ExecutionPolicy Bypass -NoExit -File `"`"$mainScript`"`"' -Verb RunAs; exit`""
     $Shortcut.WorkingDirectory = $scriptDir
     $Shortcut.IconLocation = $iconPath
 
