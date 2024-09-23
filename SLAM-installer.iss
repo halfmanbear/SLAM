@@ -13,10 +13,15 @@ DisableDirPage=no
 [Files]
 ; No files are directly included because we're downloading them from GitHub
 
+[Run]
+Filename: "explorer.exe"; Parameters: "{app}"; Flags: postinstall nowait; Description: "Open installation folder"
+Filename: "{app}\config.txt"; Flags: postinstall shellexec; Description: "Open config.txt"
+
 [Code]
 const
   PS7Path = 'C:\Program Files\PowerShell\7\pwsh.exe';
   GitExe = 'C:\Program Files\Git\cmd\git.exe';
+  WingetExe = 'winget';
   TempGitCloneDir = '{tmp}\SLAMTempClone';  // Temporary directory for cloning
 
 procedure ExecWithWait(FilePath: String; Parameters: String);
@@ -46,6 +51,35 @@ end;
 function CheckPowerShell7Installed(): Boolean;
 begin
   Result := IsInstalled(PS7Path);
+end;
+
+function CheckWingetInstalled(): Boolean;
+var
+  ResultCode: Integer;
+begin
+  Result := Exec('cmd.exe', '/c winget --version', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
+end;
+
+procedure InstallGitWithWinget();
+begin
+  if CheckWingetInstalled() then
+  begin
+    Log('Installing Git using winget...');
+    ExecWithWait(WingetExe, 'install --id Git.Git -e --source winget');
+  end
+  else
+    MsgBox('Winget is not installed or not available. Please install Git manually.', mbError, MB_OK);
+end;
+
+procedure InstallPowerShell7WithWinget();
+begin
+  if CheckWingetInstalled() then
+  begin
+    Log('Installing PowerShell 7 using winget...');
+    ExecWithWait(WingetExe, 'install --id Microsoft.PowerShell -e --source winget');
+  end
+  else
+    MsgBox('Winget is not installed or not available. Please install PowerShell 7 manually.', mbError, MB_OK);
 end;
 
 procedure CloneToTempDirectory();
@@ -105,29 +139,43 @@ var
   InstallDir: String;
 begin
   InstallDir := ExpandConstant('{app}');
-  if CheckGitInstalled() then
+
+  // Ensure Git is installed
+  if not CheckGitInstalled() then
   begin
-    CloneToTempDirectory();
-    if DirExists(ExpandConstant(TempGitCloneDir)) then
+    InstallGitWithWinget();
+    if not CheckGitInstalled() then
     begin
-      CopyTempToInstallDir();
-    end
-    else
-    begin
-      MsgBox('No files were cloned. Aborting installation.', mbError, MB_OK);
+      MsgBox('Git could not be installed automatically. Please install Git.', mbError, MB_OK);
       Exit;
     end;
+  end;
+
+  // Proceed to clone and copy files
+  CloneToTempDirectory();
+  if DirExists(ExpandConstant(TempGitCloneDir)) then
+  begin
+    CopyTempToInstallDir();
   end
   else
   begin
-    MsgBox('Git is not installed or could not be found. Please install Git.', mbError, MB_OK);
+    MsgBox('No files were cloned. Aborting installation.', mbError, MB_OK);
     Exit;
   end;
 
-  if CheckPowerShell7Installed() then
-    ExecWithWait(PS7Path, '-ExecutionPolicy Bypass -File "' + InstallDir + '\create-shortcut.ps1"')
-  else
-    MsgBox('PowerShell 7 is not installed or could not be found. Please install PowerShell 7.', mbError, MB_OK);
+  // Ensure PowerShell 7 is installed
+  if not CheckPowerShell7Installed() then
+  begin
+    InstallPowerShell7WithWinget();
+    if not CheckPowerShell7Installed() then
+    begin
+      MsgBox('PowerShell 7 could not be installed automatically. Please install PowerShell 7.', mbError, MB_OK);
+      Exit;
+    end;
+  end;
+
+  // Execute the create-shortcut.ps1 script
+  ExecWithWait(PS7Path, '-ExecutionPolicy Bypass -File "' + InstallDir + '\create-shortcut.ps1"');
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -137,6 +185,3 @@ begin
     DownloadAndInstallSLAM();  // Download and install SLAM
   end;
 end;
-
-
-
