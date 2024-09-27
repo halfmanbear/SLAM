@@ -1,27 +1,48 @@
+# Add necessary assemblies for Windows Forms
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+# Hide the PowerShell console window
+function Hide-ConsoleWindow {
+    $consoleHandle = Get-ConsoleWindow
+    if ($consoleHandle -ne 0) {
+        # 0 = Hide window
+        ShowWindowAsync $consoleHandle 0
+    }
+}
+
+# Get console window handle
+function Get-ConsoleWindow {
+    Add-Type -Namespace Win32 -Name NativeMethods -MemberDefinition @"
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr GetConsoleWindow();
+"@
+    [Win32.NativeMethods]::GetConsoleWindow()
+}
+
+# Import ShowWindowAsync function
+function ShowWindowAsync {
+    param (
+        [IntPtr]$hWnd,
+        [int]$nCmdShow
+    )
+    Add-Type -Namespace Win32 -Name NativeMethods2 -MemberDefinition @"
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+"@
+    [Win32.NativeMethods2]::ShowWindowAsync($hWnd, $nCmdShow) | Out-Null
+}
+
+# Hide the console window
+Hide-ConsoleWindow
+
 # Enable long path support
 function Enable-LongPaths {
-    Write-Host "Enabling long path support..."
     Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -Force
 }
 Enable-LongPaths
 
-# ASCII Art Banner
-$asciiArt = @"
-############################################################
-#   ________  ___            __       ___      ___         #
-#  /"       )|"  |          /""\     |"  \    /"  |        #
-# (:   \___/ ||  |         /    \     \   \  //   |        #
-#  \___  \   |:  |        /' /\  \    /\\  \/.    |        #
-#   __/  \\   \  |___    //  __'  \  |: \.        |        #
-#  /" \   :) ( \_|:  \  /   /  \\  \ |.  \    /:  |        #
-# (_______/   \_______)(___/    \___)|___|\__/|___|        #
-#                                                          #
-#       - SymLink Advanced Modding for DCS -               #
-############################################################
-
-"@
-
-# Windows API Functions
+# Windows API Functions for File Operations
 Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
@@ -32,6 +53,20 @@ public class WinAPI {
 
     [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Auto)]
     public static extern bool MoveFile(string lpExistingFileName, string lpNewFileName);
+}
+"@
+
+# Define the ModItem class
+Add-Type -TypeDefinition @"
+using System;
+
+public class ModItem {
+    public string Name { get; set; }
+    public bool IsInstalled { get; set; }
+
+    public override string ToString() {
+        return Name;
+    }
 }
 "@
 
@@ -72,21 +107,6 @@ function Move-File-With-Metadata {
     }
 }
 
-function Show-ProgressBar {
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory = $true)][int]$CurrentStep,
-        [Parameter(Mandatory = $true)][int]$TotalSteps,
-        [Parameter(Mandatory = $true)][string]$Activity,
-        [Parameter()][string]$CurrentFile = ''
-    )
-    if ($TotalSteps -le 0) {
-        $TotalSteps = 1  # Prevent division by zero
-    }
-    $percentComplete = [math]::Round(($CurrentStep / $TotalSteps) * 100)
-    Write-Progress -Activity $Activity -Status "$percentComplete% Complete - Processing $CurrentFile" -PercentComplete $percentComplete
-}
-
 # Optimized Function to remove empty directories recursively
 function Remove-EmptyDirectories {
     [CmdletBinding()]
@@ -108,7 +128,7 @@ function Remove-EmptyDirectories {
                 [System.IO.Directory]::Delete($path)
                 $totalDirsRemoved++
             } catch {
-                Write-Verbose "Failed to remove directory: $path - $_"
+                # Handle exceptions if necessary
             }
         }
     }
@@ -137,7 +157,7 @@ function Read-Config {
             }
         }
     } else {
-        Write-Host "Config file not found: $ConfigFilePath"
+        Show-CustomMessageBox -Text "Config file not found: $ConfigFilePath"
     }
     return $config
 }
@@ -175,28 +195,14 @@ function Remove-Links-Directly {
 
     $symlinkPaths = Get-ChildItem -Recurse -Force -LiteralPath $GameDirectory | Where-Object { $_.Attributes -band [System.IO.FileAttributes]::ReparsePoint } | Select-Object -ExpandProperty FullName
 
-    $totalLinks = $symlinkPaths.Count
-    if ($totalLinks -eq 0) { $totalLinks = 1 }  # Prevent division by zero
-    $currentStep = 0
-
     foreach ($symlinkPath in $symlinkPaths) {
-        $currentStep++
-        Show-ProgressBar -CurrentStep $currentStep -TotalSteps $totalLinks -Activity "Uninstalling Mod - Removing Links" -CurrentFile $symlinkPath
-
         $relativePath = $symlinkPath.Substring($GameDirectory.Length).TrimStart("\")
         $sourceFilePath = Join-Path -Path $ModSourcePath -ChildPath $relativePath
 
         if (Test-Path -LiteralPath $sourceFilePath) {
             Remove-SymbolicLink -Path $symlinkPath
-            Write-Verbose "Removed leftover symbolic link: $symlinkPath"
         }
     }
-
-    # Ensure progress bar is complete
-    Show-ProgressBar -CurrentStep $totalLinks -TotalSteps $totalLinks -Activity "Uninstalling Mod - Removing Links" -CurrentFile $null
-
-    # Clear the progress bar
-    Write-Progress -Activity "Uninstalling Mod - Removing Links" -Completed
 }
 
 # Function to install a mod
@@ -206,18 +212,26 @@ function Install-Mod {
         [Parameter(Mandatory = $true)][string]$ModName,
         [Parameter(Mandatory = $true)][string]$ModSourcePath,
         [Parameter(Mandatory = $true)][string]$GameDirectory,
-        [Parameter(Mandatory = $true)][string]$BackupDirectory
+        [Parameter(Mandatory = $true)][string]$BackupDirectory,
+        [Parameter()][System.Windows.Forms.ProgressBar]$ProgressBar
     )
 
     $backupDir = Join-Path -Path $BackupDirectory -ChildPath ("Backup-" + $ModName)
     $files = Get-ChildItem -LiteralPath $ModSourcePath -Recurse -File
     $totalFiles = $files.Count
-    if ($totalFiles -eq 0) { $totalFiles = 1 } # Prevent division by zero
     $currentStep = 0
+
+    if ($ProgressBar) {
+        $ProgressBar.Minimum = 0
+        $ProgressBar.Maximum = $totalFiles
+    }
 
     foreach ($file in $files) {
         $currentStep++
-        Show-ProgressBar -CurrentStep $currentStep -TotalSteps $totalFiles -Activity "Installing $ModName" -CurrentFile $file.FullName
+        if ($ProgressBar) {
+            $ProgressBar.Value = $currentStep
+            $ProgressBar.Refresh()
+        }
 
         $relativePath = $file.FullName.Substring($ModSourcePath.Length).TrimStart("\")
         $targetFilePath = Join-Path -Path $GameDirectory -ChildPath $relativePath
@@ -247,23 +261,21 @@ function Install-Mod {
         New-SymbolicLink -Path $targetFilePath -Target $file.FullName
     }
 
-    # Ensure progress bar is complete
-    Show-ProgressBar -CurrentStep $totalFiles -TotalSteps $totalFiles -Activity "Installing $ModName" -CurrentFile $null
-
-    # Clear the progress bar
-    Write-Progress -Activity "Installing $ModName" -Completed
-
-    Write-Host "Installed mod: $ModName" -ForegroundColor Green
+    if ($ProgressBar) {
+        $ProgressBar.Value = 0
+    }
 }
 
 # Function to uninstall a mod
 function Uninstall-Mod {
     [CmdletBinding()]
     param (
-        [Parameter(Mandatory = $true)][string]$ModName,
-        [Parameter(Mandatory = $true)][string]$ModSourcePath,
-        [Parameter(Mandatory = $true)][string]$GameDirectory,
-        [Parameter(Mandatory = $true)][string]$BackupDirectory
+        [string]$ModName,
+        [string]$ModSourcePath,
+        [string]$GameDirectory,
+        [string]$BackupDirectory,
+        [System.Windows.Forms.ProgressBar]$ProgressBar,
+        [ref]$FilesProcessed
     )
 
     $backupDir = Join-Path -Path $BackupDirectory -ChildPath ("Backup-" + $ModName)
@@ -272,33 +284,28 @@ function Uninstall-Mod {
     if (Test-Path -LiteralPath $backupDir) {
         $files = Get-ChildItem -LiteralPath $backupDir -Recurse -File
         $totalFiles = $files.Count
-        $currentStep = 0
 
-        if ($totalFiles -gt 0) {
-            foreach ($file in $files) {
-                $currentStep++
-                Show-ProgressBar -CurrentStep $currentStep -TotalSteps $totalFiles -Activity "Uninstalling $ModName" -CurrentFile $file.FullName
+        foreach ($file in $files) {
+            $relativePath = $file.FullName.Substring($backupDir.Length).TrimStart("\")
+            $targetFilePath = Join-Path -Path $GameDirectory -ChildPath $relativePath
 
-                $relativePath = $file.FullName.Substring($backupDir.Length).TrimStart("\")
-                $targetFilePath = Join-Path -Path $GameDirectory -ChildPath $relativePath
+            Remove-SymbolicLink -Path $targetFilePath
 
-                Remove-SymbolicLink -Path $targetFilePath
-
-                # Ensure target directory exists
-                $targetDir = Split-Path -Path $targetFilePath -Parent
-                if (-not (Test-Path -LiteralPath $targetDir)) {
-                    New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
-                }
-
-                # Move backup file back to original location
-                Move-File-With-Metadata -SourcePath $file.FullName -DestinationPath $targetFilePath
+            # Ensure target directory exists
+            $targetDir = Split-Path -Path $targetFilePath -Parent
+            if (-not (Test-Path -LiteralPath $targetDir)) {
+                New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
             }
 
-            # Ensure progress bar is complete
-            Show-ProgressBar -CurrentStep $totalFiles -TotalSteps $totalFiles -Activity "Uninstalling $ModName" -CurrentFile $null
+            # Move backup file back to original location
+            Move-File-With-Metadata -SourcePath $file.FullName -DestinationPath $targetFilePath
 
-            # Clear the progress bar
-            Write-Progress -Activity "Uninstalling $ModName" -Completed
+            # Increment files processed and update progress bar
+            $FilesProcessed.Value++
+            if ($ProgressBar) {
+                $ProgressBar.Value = [Math]::Min($FilesProcessed.Value, $ProgressBar.Maximum)
+                $ProgressBar.Refresh()
+            }
         }
 
         # Remove backup directory
@@ -310,11 +317,6 @@ function Uninstall-Mod {
 
     # Clean up empty directories
     Remove-EmptyDirectories -RootPath $GameDirectory
-
-    # Clear any progress bar if it wasn't already
-    Write-Progress -Activity "Uninstalling $ModName" -Completed
-
-    Write-Host "Uninstalled mod: $ModName" -ForegroundColor Green
 }
 
 # Function to find mod conflicts at the mod level
@@ -422,344 +424,731 @@ function Find-Mod-Conflicts-With-Installed {
     return $conflictingMods | Select-Object -Unique
 }
 
-
-# User Interface Functions
-function Select-Game {
-    [CmdletBinding()]
+# Function to show a custom message box with dark theme
+function Show-CustomMessageBox {
     param (
-        [Parameter(Mandatory = $true)][string]$BasePath
+        [string]$Text,
+        [string]$Title = "Message",
+        [string]$Buttons = "OKCancel"
     )
 
-    Clear-Host
-    Write-Host $asciiArt -ForegroundColor Blue
-    $gamesPath = Join-Path -Path $BasePath -ChildPath 'Games'
-    $games = Get-ChildItem -LiteralPath $gamesPath -Directory
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = $Title
+    $form.Size = New-Object System.Drawing.Size(400, 200)
+    $form.StartPosition = "CenterParent"
+    $form.FormBorderStyle = 'FixedDialog'
+    $form.MaximizeBox = $false
+    $form.MinimizeBox = $false
+    $form.BackColor = [System.Drawing.Color]::FromArgb(30, 30, 30)
+    $form.ForeColor = [System.Drawing.Color]::White
+    $form.ShowInTaskbar = $false
 
-    Write-Host "Available games:" -ForegroundColor Cyan
-    for ($i = 0; $i -lt $games.Count; $i++) {
-        Write-Host "$($i + 1). $($games[$i].Name)"
+    # Label
+    $label = New-Object System.Windows.Forms.Label
+    $label.Text = $Text
+    $label.Size = New-Object System.Drawing.Size(360, 80)
+    $label.Location = New-Object System.Drawing.Point(20, 20)
+    $label.BackColor = $form.BackColor
+    $label.ForeColor = $form.ForeColor
+    $label.AutoSize = $false
+    $label.TextAlign = 'MiddleCenter'
+    $form.Controls.Add($label)
+
+    # Buttons
+    switch ($Buttons) {
+        "OK" {
+            $buttonOK = New-Object System.Windows.Forms.Button
+            $buttonOK.Text = "OK"
+            $buttonOK.DialogResult = [System.Windows.Forms.DialogResult]::OK
+            $buttonOK.Location = New-Object System.Drawing.Point(160, 120)
+            $buttonOK.Size = New-Object System.Drawing.Size(75, 30)
+            $buttonOK.BackColor = [System.Drawing.Color]::FromArgb(70, 70, 70)
+            $buttonOK.ForeColor = [System.Drawing.Color]::White
+            $form.Controls.Add($buttonOK)
+            $form.AcceptButton = $buttonOK
+        }
+        "YesNo" {
+            $buttonYes = New-Object System.Windows.Forms.Button
+            $buttonYes.Text = "Yes"
+            $buttonYes.DialogResult = [System.Windows.Forms.DialogResult]::Yes
+            $buttonYes.Location = New-Object System.Drawing.Point(110, 120)
+            $buttonYes.Size = New-Object System.Drawing.Size(75, 30)
+            $buttonYes.BackColor = [System.Drawing.Color]::FromArgb(70, 70, 70)
+            $buttonYes.ForeColor = [System.Drawing.Color]::White
+            $form.Controls.Add($buttonYes)
+
+            $buttonNo = New-Object System.Windows.Forms.Button
+            $buttonNo.Text = "No"
+            $buttonNo.DialogResult = [System.Windows.Forms.DialogResult]::No
+            $buttonNo.Location = New-Object System.Drawing.Point(210, 120)
+            $buttonNo.Size = New-Object System.Drawing.Size(75, 30)
+            $buttonNo.BackColor = [System.Drawing.Color]::FromArgb(70, 70, 70)
+            $buttonNo.ForeColor = [System.Drawing.Color]::White
+            $form.Controls.Add($buttonNo)
+
+            $form.AcceptButton = $buttonYes
+            $form.CancelButton = $buttonNo
+        }
+        default {
+            # OKCancel
+            $buttonOK = New-Object System.Windows.Forms.Button
+            $buttonOK.Text = "OK"
+            $buttonOK.DialogResult = [System.Windows.Forms.DialogResult]::OK
+            $buttonOK.Location = New-Object System.Drawing.Point(110, 120)
+            $buttonOK.Size = New-Object System.Drawing.Size(75, 30)
+            $buttonOK.BackColor = [System.Drawing.Color]::FromArgb(70, 70, 70)
+            $buttonOK.ForeColor = [System.Drawing.Color]::White
+            $form.Controls.Add($buttonOK)
+
+            $buttonCancel = New-Object System.Windows.Forms.Button
+            $buttonCancel.Text = "Cancel"
+            $buttonCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+            $buttonCancel.Location = New-Object System.Drawing.Point(210, 120)
+            $buttonCancel.Size = New-Object System.Drawing.Size(75, 30)
+            $buttonCancel.BackColor = [System.Drawing.Color]::FromArgb(70, 70, 70)
+            $buttonCancel.ForeColor = [System.Drawing.Color]::White
+            $form.Controls.Add($buttonCancel)
+
+            $form.AcceptButton = $buttonOK
+            $form.CancelButton = $buttonCancel
+        }
     }
-    Write-Host ""
-    Write-Host "q. Quit" -ForegroundColor Red
 
-    while ($true) {
-        $selection = Read-Host "Enter the number corresponding to the game or 'q' to quit"
-        if ($selection -eq 'q') {
+    return $form.ShowDialog()
+}
+
+# Function to get the script directory
+function Get-ScriptDirectory {
+    if ($MyInvocation.PSCommandPath) {
+        $scriptDir = Split-Path -Parent $MyInvocation.PSCommandPath
+    } elseif ($PSScriptRoot) {
+        $scriptDir = $PSScriptRoot
+    } else {
+        $scriptDir = Get-Location
+    }
+    return $scriptDir
+}
+
+# GUI Functions
+function Initialize-GUI {
+    # Create the form
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = "SymLink Advanced Modding for DCS"
+    $form.Size = New-Object System.Drawing.Size(800, 700)
+    $form.StartPosition = "CenterScreen"
+    $form.MaximizeBox = $false
+    $form.BackColor = [System.Drawing.Color]::FromArgb(30, 30, 30)
+    $form.ForeColor = [System.Drawing.Color]::White
+
+    # Remove the FormClosed event handler to prevent the exception
+    # $form.Add_FormClosed({
+    #     # Exit the script when the form is closed
+    #     exit
+    # })
+
+    # Label for games
+    $labelGames = New-Object System.Windows.Forms.Label
+    $labelGames.Text = "Available Games:"
+    $labelGames.Location = New-Object System.Drawing.Point(10, 10)
+    $labelGames.Size = New-Object System.Drawing.Size(200, 20)
+    $labelGames.BackColor = $form.BackColor
+    $labelGames.ForeColor = $form.ForeColor
+    $form.Controls.Add($labelGames)
+
+    # ListBox for games
+    $listboxGames = New-Object System.Windows.Forms.ListBox
+    $listboxGames.Location = New-Object System.Drawing.Point(10, 40)
+    $listboxGames.Size = New-Object System.Drawing.Size(200, 200)
+    $listboxGames.BackColor = [System.Drawing.Color]::FromArgb(50, 50, 50)
+    $listboxGames.ForeColor = [System.Drawing.Color]::White
+    # Remove custom drawing
+    # $listboxGames.DrawMode = [System.Windows.Forms.DrawMode]::OwnerDrawFixed
+    # $listboxGames.ItemHeight = 20
+    $form.Controls.Add($listboxGames)
+
+    # Label for mod parents
+    $labelModParents = New-Object System.Windows.Forms.Label
+    $labelModParents.Text = "Mod Parent Directories:"
+    $labelModParents.Location = New-Object System.Drawing.Point(220, 10)
+    $labelModParents.Size = New-Object System.Drawing.Size(200, 20)
+    $labelModParents.BackColor = $form.BackColor
+    $labelModParents.ForeColor = $form.ForeColor
+    $form.Controls.Add($labelModParents)
+
+    # ListBox for mod parents
+    $listboxModParents = New-Object System.Windows.Forms.ListBox
+    $listboxModParents.Location = New-Object System.Drawing.Point(220, 40)
+    $listboxModParents.Size = New-Object System.Drawing.Size(200, 200)
+    $listboxModParents.BackColor = [System.Drawing.Color]::FromArgb(50, 50, 50)
+    $listboxModParents.ForeColor = [System.Drawing.Color]::White
+    # Remove custom drawing
+    # $listboxModParents.DrawMode = [System.Windows.Forms.DrawMode]::OwnerDrawFixed
+    # $listboxModParents.ItemHeight = 20
+    $form.Controls.Add($listboxModParents)
+
+    # Label for mods
+    $labelMods = New-Object System.Windows.Forms.Label
+    $labelMods.Text = "Available Mods:"
+    $labelMods.Location = New-Object System.Drawing.Point(430, 10)
+    $labelMods.Size = New-Object System.Drawing.Size(200, 20)
+    $labelMods.BackColor = $form.BackColor
+    $labelMods.ForeColor = $form.ForeColor
+    $form.Controls.Add($labelMods)
+
+    # Checkbox for Select All
+    $checkboxSelectAll = New-Object System.Windows.Forms.CheckBox
+    $checkboxSelectAll.Text = "Select All"
+    $checkboxSelectAll.Location = New-Object System.Drawing.Point(640, 10)
+    $checkboxSelectAll.Size = New-Object System.Drawing.Size(100, 20)
+    $checkboxSelectAll.BackColor = $form.BackColor
+    $checkboxSelectAll.ForeColor = $form.ForeColor
+    $form.Controls.Add($checkboxSelectAll)
+
+    # Checkbox for sorting by installed status
+    $checkboxSortByInstalled = New-Object System.Windows.Forms.CheckBox
+    $checkboxSortByInstalled.Text = "Sort by Installed Status"
+    $checkboxSortByInstalled.Location = New-Object System.Drawing.Point(640, 40)
+    $checkboxSortByInstalled.Size = New-Object System.Drawing.Size(200, 20)
+    $checkboxSortByInstalled.BackColor = $form.BackColor
+    $checkboxSortByInstalled.ForeColor = $form.ForeColor
+    $form.Controls.Add($checkboxSortByInstalled)
+
+    # ListBox for mods
+    $listboxMods = New-Object System.Windows.Forms.ListBox
+    $listboxMods.Location = New-Object System.Drawing.Point(430, 40)
+    $listboxMods.Size = New-Object System.Drawing.Size(200, 200)
+    $listboxMods.SelectionMode = "MultiSimple"
+    $listboxMods.BackColor = [System.Drawing.Color]::FromArgb(50, 50, 50)
+    $listboxMods.ForeColor = [System.Drawing.Color]::White
+    $listboxMods.DrawMode = [System.Windows.Forms.DrawMode]::OwnerDrawFixed
+    $listboxMods.ItemHeight = 20
+    $form.Controls.Add($listboxMods)
+
+    # Open Mod Folder button
+    $buttonOpenModFolder = New-Object System.Windows.Forms.Button
+    $buttonOpenModFolder.Text = "Open Mod Folder"
+    $buttonOpenModFolder.Location = New-Object System.Drawing.Point(10, 250)
+    $buttonOpenModFolder.Size = New-Object System.Drawing.Size(150, 30)
+    $buttonOpenModFolder.BackColor = [System.Drawing.Color]::FromArgb(70, 70, 70)
+    $buttonOpenModFolder.ForeColor = [System.Drawing.Color]::White
+    $buttonOpenModFolder.FlatStyle = 'Flat'
+    $form.Controls.Add($buttonOpenModFolder)
+
+    # Install button
+    $buttonInstall = New-Object System.Windows.Forms.Button
+    $buttonInstall.Text = "Install Selected Mods"
+    $buttonInstall.Location = New-Object System.Drawing.Point(220, 250)
+    $buttonInstall.Size = New-Object System.Drawing.Size(150, 30)
+    $buttonInstall.BackColor = [System.Drawing.Color]::FromArgb(70, 70, 70)
+    $buttonInstall.ForeColor = [System.Drawing.Color]::White
+    $buttonInstall.FlatStyle = 'Flat'
+    $form.Controls.Add($buttonInstall)
+
+    # Uninstall button
+    $buttonUninstall = New-Object System.Windows.Forms.Button
+    $buttonUninstall.Text = "Uninstall Selected Mods"
+    $buttonUninstall.Location = New-Object System.Drawing.Point(430, 250)
+    $buttonUninstall.Size = New-Object System.Drawing.Size(150, 30)
+    $buttonUninstall.BackColor = [System.Drawing.Color]::FromArgb(70, 70, 70)
+    $buttonUninstall.ForeColor = [System.Drawing.Color]::White
+    $buttonUninstall.FlatStyle = 'Flat'
+    $form.Controls.Add($buttonUninstall)
+
+    # Progress Bar
+    $progressBar = New-Object System.Windows.Forms.ProgressBar
+    $progressBar.Location = New-Object System.Drawing.Point(10, 300)
+    $progressBar.Size = New-Object System.Drawing.Size(760, 20)
+    $progressBar.Minimum = 0
+    $form.Controls.Add($progressBar)
+
+    # Logo Image
+    $scriptDir = Get-ScriptDirectory
+    $logoPath = Join-Path -Path $scriptDir -ChildPath 'icon.ico'
+    if (Test-Path -LiteralPath $logoPath) {
+        $logoImage = [System.Drawing.Image]::FromFile($logoPath)
+
+        $pictureBox = New-Object System.Windows.Forms.PictureBox
+        $pictureBox.Image = $logoImage
+        $pictureBox.SizeMode = 'Zoom'
+        $pictureBox.Location = New-Object System.Drawing.Point(275, 330)
+        $pictureBox.Size = New-Object System.Drawing.Size(250, 250)
+        $pictureBox.BackColor = $form.BackColor
+        $form.Controls.Add($pictureBox)
+    }
+
+    # Status Label
+    $labelStatus = New-Object System.Windows.Forms.Label
+    $labelStatus.Text = "Status: Ready"
+    $labelStatus.Location = New-Object System.Drawing.Point(10, 590)
+    $labelStatus.Size = New-Object System.Drawing.Size(760, 20)
+    $labelStatus.BackColor = $form.BackColor
+    $labelStatus.ForeColor = $form.ForeColor
+    $form.Controls.Add($labelStatus)
+
+    # Donation Link Label
+    $linkLabelDonate = New-Object System.Windows.Forms.LinkLabel
+    $linkLabelDonate.Text = "Donate/support the developer"
+    $linkLabelDonate.Location = New-Object System.Drawing.Point(300, 620)
+    $linkLabelDonate.Size = New-Object System.Drawing.Size(200, 20)
+    $linkLabelDonate.BackColor = $form.BackColor
+    $linkLabelDonate.LinkColor = [System.Drawing.Color]::LightBlue
+    $linkLabelDonate.ActiveLinkColor = [System.Drawing.Color]::Orange
+    $linkLabelDonate.VisitedLinkColor = [System.Drawing.Color]::Purple
+    $linkLabelDonate.LinkBehavior = 'HoverUnderline'
+    $linkLabelDonate.Add_LinkClicked({
+        Start-Process "https://buymeacoffee.com/halfmanbear"
+    })
+    $form.Controls.Add($linkLabelDonate)
+
+    # Global variables
+    $script:GamesPath = $null
+    $script:Config = $null
+    $script:scriptDir = $scriptDir
+
+    # Load configuration
+    Load-Configuration
+
+    # Populate games
+    Populate-GamesList -ListBox $listboxGames
+
+    # Populate mod parents
+    Populate-ModParentsList -ListBox $listboxModParents
+
+    # Event handlers
+    $listboxGames.Add_SelectedIndexChanged({
+        UpdateModsList $listboxGames $listboxModParents $listboxMods
+    })
+
+    $listboxModParents.Add_SelectedIndexChanged({
+        UpdateModsList $listboxGames $listboxModParents $listboxMods
+    })
+
+    $buttonInstall.Add_Click({
+        InstallSelectedMods $listboxGames $listboxModParents $listboxMods $progressBar $labelStatus
+    })
+
+    $buttonUninstall.Add_Click({
+        UninstallSelectedMods $listboxGames $listboxModParents $listboxMods $progressBar $labelStatus
+    })
+
+    # Event handler for Select All checkbox
+    $checkboxSelectAll.Add_CheckedChanged({
+        if ($checkboxSelectAll.Checked) {
+            # Select all mods
+            for ($i = 0; $i -lt $listboxMods.Items.Count; $i++) {
+                $listboxMods.SetSelected($i, $true)
+            }
+        } else {
+            # Deselect all mods
+            $listboxMods.ClearSelected()
+        }
+    })
+
+    # Event handler for Sort by Installed Status checkbox
+    $checkboxSortByInstalled.Add_CheckedChanged({
+        UpdateModsList $listboxGames $listboxModParents $listboxMods
+    })
+
+    # Event handler for Open Mod Folder button
+    $buttonOpenModFolder.Add_Click({
+        $modFolderPath = Join-Path -Path $scriptDir -ChildPath "Games\DCS"
+        if (Test-Path -LiteralPath $modFolderPath) {
+            Start-Process "explorer.exe" -ArgumentList "`"$modFolderPath`""
+        } else {
+            Show-CustomMessageBox -Text "Mod folder does not exist: $modFolderPath" -Title "Error" -Buttons "OK"
+        }
+    })
+
+    # DrawItem event handler for mods
+    $listboxMods.Add_DrawItem({
+        param($sender, $e)
+        try {
+            if ($e.Index -ge 0) {
+                $listBox = $sender
+                $graphics = $e.Graphics
+                $modItem = $listBox.Items[$e.Index]
+
+                # Set default colors
+                $backColor = $listBox.BackColor
+                $foreColor = $listBox.ForeColor
+
+                if ($e.State -band [System.Windows.Forms.DrawItemState]::Selected) {
+                    # Selected item
+                    $backColor = [System.Drawing.Color]::Blue
+                    $foreColor = [System.Drawing.Color]::White
+                } elseif ($modItem.IsInstalled) {
+                    # Installed mod
+                    $foreColor = [System.Drawing.Color]::Green
+                }
+
+                $e.Graphics.FillRectangle((New-Object System.Drawing.SolidBrush $backColor), $e.Bounds)
+                $textFont = $e.Font
+
+                # Access properties directly
+                $boundsX = $e.Bounds.X
+                $boundsY = $e.Bounds.Y
+                $boundsWidth = $e.Bounds.Width
+                $boundsHeight = $e.Bounds.Height
+
+                # Create RectangleF for DrawString
+                $textBounds = New-Object System.Drawing.RectangleF(
+                    [float]($boundsX + 2),
+                    [float]$boundsY,
+                    [float]($boundsWidth - 4),
+                    [float]$boundsHeight
+                )
+
+                $textBrush = New-Object System.Drawing.SolidBrush $foreColor
+                $graphics.DrawString($modItem.Name, $textFont, $textBrush, $textBounds)
+
+                $e.DrawFocusRectangle()
+            }
+        } catch {
+            Show-CustomMessageBox -Text "Error in drawing mod item: $_" -Title "Error" -Buttons "OK"
+        }
+    })
+
+    # Show the form
+    $form.ShowDialog() | Out-Null
+}
+
+function Load-Configuration {
+    $scriptDir = Get-ScriptDirectory
+    $script:scriptDir = $scriptDir
+
+    # Read Configuration (using config.txt)
+    $configFilePath = Join-Path -Path $scriptDir -ChildPath 'config.txt'
+    $script:Config = Read-Config -ConfigFilePath $configFilePath
+
+    $configUpdated = $false
+
+    if (-not $Config.ContainsKey('CoreGameDirectory') -or [string]::IsNullOrEmpty($Config['CoreGameDirectory'])) {
+        # Show custom message
+        Show-CustomMessageBox -Text "Please locate your [Eagle Dynamics / DCS World] install folder. The default path is usually 'C:\Program Files\Eagle Dynamics\DCS World'." -Title "Select Core Game Directory" -Buttons "OK"
+
+        $folderBrowser = New-Object System.Windows.Forms.FolderBrowserDialog
+        $folderBrowser.Description = "Select Core Game Directory"
+        $folderBrowser.SelectedPath = "C:\Program Files\"
+        if ($folderBrowser.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            $Config['CoreGameDirectory'] = $folderBrowser.SelectedPath
+            $configUpdated = $true
+        } else {
+            Show-CustomMessageBox -Text "CoreGameDirectory is required. Exiting." -Title "Error" -Buttons "OK"
             exit
-        } elseif ([int]::TryParse($selection, [ref]$null)) {
-            $selectedGameIndex = [int]$selection
-            if ($selectedGameIndex -gt 0 -and $selectedGameIndex -le $games.Count) {
-                return $games[$selectedGameIndex - 1].FullName
-            } else {
-                Write-Host "Invalid selection. Try Again." -ForegroundColor Red
-            }
-        } else {
-            Write-Host "Invalid input. Try Again." -ForegroundColor Red
         }
+    }
+
+    if (-not $Config.ContainsKey('SavedGamesDirectory') -or [string]::IsNullOrEmpty($Config['SavedGamesDirectory'])) {
+        # Show custom message
+        Show-CustomMessageBox -Text "Please locate your [Saved Games / DCS] directory. The default path is 'User\Saved Games\DCS'." -Title "Select Saved Games Directory" -Buttons "OK"
+
+        $folderBrowser = New-Object System.Windows.Forms.FolderBrowserDialog
+        $folderBrowser.Description = "Select Saved Games Directory"
+        $folderBrowser.SelectedPath = Join-Path -Path $env:USERPROFILE -ChildPath "Saved Games\"
+        if ($folderBrowser.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            $Config['SavedGamesDirectory'] = $folderBrowser.SelectedPath
+            $configUpdated = $true
+        } else {
+            Show-CustomMessageBox -Text "SavedGamesDirectory is required. Exiting." -Title "Error" -Buttons "OK"
+            exit
+        }
+    }
+
+    if ($configUpdated) {
+        # Save the updated configuration back to config.txt
+        $configLines = @()
+        foreach ($key in $Config.Keys) {
+            $configLines += "$key=$($Config[$key])"
+        }
+        Set-Content -Path $configFilePath -Value $configLines
+
+        # Restart the script to load new configuration
+        Start-Process -FilePath "powershell.exe" -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$($MyInvocation.PSCommandPath)`""
+        exit
+    }
+
+    $script:GamesPath = Join-Path -Path $scriptDir -ChildPath 'Games'
+}
+
+function Populate-GamesList {
+    param (
+        [System.Windows.Forms.ListBox]$ListBox
+    )
+    $games = Get-ChildItem -LiteralPath $GamesPath -Directory
+    $ListBox.Items.Clear()
+    foreach ($game in $games) {
+        $ListBox.Items.Add($game.Name)
     }
 }
 
-function Select-ModParent {
-    [CmdletBinding()]
+function Populate-ModParentsList {
     param (
-        [Parameter(Mandatory = $true)][string]$GamePath
+        [System.Windows.Forms.ListBox]$ListBox
     )
-
-    Clear-Host
-    Write-Host $asciiArt -ForegroundColor Blue
     $modParents = @("Core Mods", "Saved Games Mods")
-
-    Write-Host "Available mod parent directories:" -ForegroundColor Cyan
-    for ($i = 0; $i -lt $modParents.Count; $i++) {
-        Write-Host "$($i + 1). $($modParents[$i])"
+    $ListBox.Items.Clear()
+    foreach ($modParent in $modParents) {
+        $ListBox.Items.Add($modParent)
     }
-    Write-Host ""
-    Write-Host "b. Back" -ForegroundColor Yellow
+}
 
-    while ($true) {
-        $selection = Read-Host "Enter the number corresponding to the mod parent directory or 'b' to go back"
-        if ($selection -eq 'b') {
-            return 'back'
-        } elseif ([int]::TryParse($selection, [ref]$null)) {
-            $selectedIndex = [int]$selection
-            if ($selectedIndex -gt 0 -and $selectedIndex -le $modParents.Count) {
-                return Join-Path -Path $GamePath -ChildPath $modParents[$selectedIndex - 1]
+function UpdateModsList {
+    param (
+        [System.Windows.Forms.ListBox]$GamesListBox,
+        [System.Windows.Forms.ListBox]$ModParentsListBox,
+        [System.Windows.Forms.ListBox]$ModsListBox
+    )
+    $ModsListBox.Items.Clear()
+    $selectedGame = $GamesListBox.SelectedItem
+    $selectedModParent = $ModParentsListBox.SelectedItem
+
+    if ($selectedGame -and $selectedModParent) {
+        $gamePath = Join-Path -Path $GamesPath -ChildPath $selectedGame
+        $modParentPath = Join-Path -Path $gamePath -ChildPath $selectedModParent
+
+        if (Test-Path -LiteralPath $modParentPath) {
+            $mods = Get-ChildItem -LiteralPath $modParentPath -Directory | Where-Object { $_.Name -notmatch '^Backup-' }
+
+            # Determine game directory
+            if ($selectedModParent -eq "Core Mods") {
+                $gameDirectory = $Config['CoreGameDirectory']
+            } elseif ($selectedModParent -eq "Saved Games Mods") {
+                $gameDirectory = $Config['SavedGamesDirectory']
             } else {
-                Write-Host "Invalid selection. Try Again." -ForegroundColor Red
+                Show-CustomMessageBox -Text "Invalid mod parent directory." -Title "Error" -Buttons "OK"
+                return
             }
-        } else {
-            Write-Host "Invalid input. Try Again." -ForegroundColor Red
+
+            # Collect mod items
+            $modItems = @()
+            foreach ($mod in $mods) {
+                $modName = $mod.Name
+                $isInstalled = Is-Mod-Installed -ModPath $mod.FullName -GameDirectory $gameDirectory
+                $modItem = New-Object ModItem
+                $modItem.Name = $modName
+                $modItem.IsInstalled = $isInstalled
+                $modItems += $modItem
+            }
+
+            # Check if sorting by installed status is enabled
+            if ($checkboxSortByInstalled.Checked) {
+                # Sort by installed status, installed mods come first
+                $modItems = $modItems | Sort-Object -Property { -not $_.IsInstalled }, Name
+            } else {
+                # Default sorting by name
+                $modItems = $modItems | Sort-Object Name
+            }
+
+            # Add sorted mod items to the listbox
+            foreach ($modItem in $modItems) {
+                $ModsListBox.Items.Add($modItem)
+            }
         }
     }
 }
 
-function Select-Mod {
-    [CmdletBinding()]
+function InstallSelectedMods {
     param (
-        [Parameter(Mandatory = $true)][string]$ModParentPath,
-        [Parameter(Mandatory = $true)][string]$GameDirectory
+        [System.Windows.Forms.ListBox]$GamesListBox,
+        [System.Windows.Forms.ListBox]$ModParentsListBox,
+        [System.Windows.Forms.ListBox]$ModsListBox,
+        [System.Windows.Forms.ProgressBar]$ProgressBar,
+        [System.Windows.Forms.Label]$StatusLabel
     )
 
-    Clear-Host
-    Write-Host $asciiArt -ForegroundColor Blue
-    $mods = Get-ChildItem -LiteralPath $ModParentPath -Directory | Where-Object { $_.Name -notmatch '^Backup-' }
-    $modList = @()
-
-    Write-Host "Available mods:" -ForegroundColor Cyan
-    for ($i = 0; $i -lt $mods.Count; $i++) {
-        $mod = $mods[$i]
-        $modName = $mod.Name
-        if (Is-Mod-Installed -ModPath $mod.FullName -GameDirectory $GameDirectory) {
-            $modName = "* " + $modName
-            Write-Host "$($i + 1). $modName" -ForegroundColor Green
-        } else {
-            Write-Host "$($i + 1). $modName"
+    $selectedMods = $ModsListBox.SelectedItems
+    if ($selectedMods.Count -gt 0) {
+        foreach ($modItem in $selectedMods) {
+            $modName = $modItem.Name
+            InstallModFromGUI -ModName $modName -GamesListBox $GamesListBox -ModParentsListBox $ModParentsListBox -ProgressBar $ProgressBar -StatusLabel $StatusLabel
         }
-        $modList += $modName
-    }
-
-    # Add options for Install All and Uninstall All
-    Write-Host ""
-    Write-Host "a. Install All Mods" -ForegroundColor Yellow
-    Write-Host "u. Uninstall All Mods" -ForegroundColor Yellow
-    Write-Host "b. Back" -ForegroundColor Yellow
-
-    while ($true) {
-        $selection = Read-Host "Enter the number of a mod, 'a' to install all, 'u' to uninstall all, or 'b' to go back"
-        if ($selection -eq 'b') {
-            return 'back'
-        } elseif ($selection -eq 'a') {
-            return 'install_all'
-        } elseif ($selection -eq 'u') {
-            return 'uninstall_all'
-        } elseif ([int]::TryParse($selection, [ref]$null)) {
-            $selectedIndex = [int]$selection
-            if ($selectedIndex -gt 0 -and $selectedIndex -le $mods.Count) {
-                return $mods[$selectedIndex - 1].FullName
-            } else {
-                Write-Host "Invalid selection. Try again." -ForegroundColor Red
-            }
-        } else {
-            Write-Host "Invalid input. Try again." -ForegroundColor Red
-        }
+        UpdateModsList $GamesListBox $ModParentsListBox $ModsListBox
+    } else {
+        Show-CustomMessageBox -Text "Please select at least one mod to install." -Title "Information" -Buttons "OK"
     }
 }
 
-# Main Script
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
-if (-not $scriptDir) {
-    $scriptDir = Get-Location
-}
+function UninstallSelectedMods {
+    param (
+        [System.Windows.Forms.ListBox]$GamesListBox,
+        [System.Windows.Forms.ListBox]$ModParentsListBox,
+        [System.Windows.Forms.ListBox]$ModsListBox,
+        [System.Windows.Forms.ProgressBar]$ProgressBar,
+        [System.Windows.Forms.Label]$StatusLabel
+    )
 
-# Read Configuration (using config.txt)
-$configFilePath = Join-Path -Path $scriptDir -ChildPath 'config.txt'
-$config = Read-Config -ConfigFilePath $configFilePath
+    $selectedMods = $ModsListBox.SelectedItems
+    if ($selectedMods.Count -gt 0) {
+        $totalFiles = 0
 
-if (-not $config.ContainsKey('CoreGameDirectory') -or [string]::IsNullOrEmpty($config['CoreGameDirectory'])) {
-    Write-Host "CoreGameDirectory not found in config file. Exiting."
-    exit
-}
-if (-not $config.ContainsKey('SavedGamesDirectory') -or [string]::IsNullOrEmpty($config['SavedGamesDirectory'])) {
-    Write-Host "SavedGamesDirectory not found in config file. Exiting."
-    exit
-}
+        # Calculate the total number of files across all selected mods
+        foreach ($modItem in $selectedMods) {
+            $modName = $modItem.Name
+            $selectedGame = $GamesListBox.SelectedItem
+            $selectedModParent = $ModParentsListBox.SelectedItem
 
-# Main Loop
-while ($true) {
-    $gamePath = Select-Game -BasePath $scriptDir
-    $selectedGameName = Split-Path -Path $gamePath -Leaf
+            if ($selectedGame -and $selectedModParent) {
+                $gamePath = Join-Path -Path $GamesPath -ChildPath $selectedGame
+                $modParentPath = Join-Path -Path $gamePath -ChildPath $selectedModParent
+                $modPath = Join-Path -Path $modParentPath -ChildPath $modName
 
-    while ($true) {
-        $modParentPath = Select-ModParent -GamePath $gamePath
-        if ($modParentPath -eq 'back') {
-            break  # Go back to game selection
-        }
-
-        if ($modParentPath -like "*Core Mods*") {
-            $gameDirectory = $config['CoreGameDirectory']
-        } elseif ($modParentPath -like "*Saved Games Mods*") {
-            $gameDirectory = $config['SavedGamesDirectory']
-        } else {
-            Write-Host "Invalid mod parent directory. Try Again." -ForegroundColor Red
-            continue
-        }
-
-        while ($true) {
-            $modSelection = Select-Mod -ModParentPath $modParentPath -GameDirectory $gameDirectory
-            if ($modSelection -eq 'back') {
-                break  # Go back to mod parent selection
-            } elseif ($modSelection -eq 'install_all') {
-                $mods = Get-ChildItem -LiteralPath $modParentPath -Directory | Where-Object { $_.Name -notmatch '^Backup-' }
-                $modsToInstall = @()
-                foreach ($mod in $mods) {
-                    if (-not (Is-Mod-Installed -ModPath $mod.FullName -GameDirectory $gameDirectory)) {
-                        $modsToInstall += $mod
-                    } else {
-                        Write-Host "$($mod.Name) is already installed." -ForegroundColor Yellow
-                    }
+                # Count files in this mod
+                if (Test-Path -LiteralPath $modPath) {
+                    $totalFiles += (Get-ChildItem -LiteralPath $modPath -Recurse -File).Count
                 }
-
-                # Check for conflicts at mod level
-                $modConflicts = Find-Mod-Conflicts -Mods $modsToInstall
-
-                if ($modConflicts.Count -gt 0) {
-                    Write-Host "Conflicts detected among mods. Please resolve them." -ForegroundColor Red
-                    $modsToInstallFinal = @()
-                    $modsToSkip = @()
-
-                    $processedMods = @{}
-
-                    foreach ($modName in $modConflicts.Keys) {
-                        if ($processedMods.ContainsKey($modName)) {
-                            continue
-                        }
-
-                        # Get all conflicting mods for this mod
-                        $conflictingMods = @($modName) + $modConflicts[$modName]
-
-                        # Remove any mods already processed
-                        $conflictingMods = $conflictingMods | Where-Object { -not $processedMods.ContainsKey($_) }
-
-                        if ($conflictingMods.Count -le 1) {
-                            continue
-                        }
-
-                        Write-Host "The following mods conflict with each other:" -ForegroundColor Cyan
-                        for ($i = 0; $i -lt $conflictingMods.Count; $i++) {
-                            Write-Host "$($i + 1). $($conflictingMods[$i])"
-                        }
-
-                        while ($true) {
-                            $selection = Read-Host "Select the mod number to install, or 's' to skip all these mods"
-                            if ($selection -eq 's') {
-                                foreach ($modToSkip in $conflictingMods) {
-                                    $modsToSkip += $modToSkip
-                                    $processedMods[$modToSkip] = $true
-                                }
-                                break
-                            } elseif ([int]::TryParse($selection, [ref]$null)) {
-                                $selectedIndex = [int]$selection
-                                if ($selectedIndex -gt 0 -and $selectedIndex -le $conflictingMods.Count) {
-                                    $selectedMod = $conflictingMods[$selectedIndex - 1]
-                                    $modsToInstallFinal += $selectedMod
-                                    $processedMods[$selectedMod] = $true
-
-                                    # Skip the other mods
-                                    foreach ($modToSkip in $conflictingMods) {
-                                        if ($modToSkip -ne $selectedMod) {
-                                            $modsToSkip += $modToSkip
-                                            $processedMods[$modToSkip] = $true
-                                        }
-                                    }
-                                    break
-                                } else {
-                                    Write-Host "Invalid selection. Try again." -ForegroundColor Red
-                                }
-                            } else {
-                                Write-Host "Invalid input. Try again." -ForegroundColor Red
-                            }
-                        }
-                    }
-
-                    # Add any mods that don't have conflicts
-                    foreach ($mod in $modsToInstall) {
-                        $modName = $mod.Name
-                        if (-not $processedMods.ContainsKey($modName) -and -not $modsToSkip.Contains($modName)) {
-                            $modsToInstallFinal += $modName
-                        }
-                    }
-
-                    # Update modsToInstall to only include selected mods
-                    $modsToInstall = $mods | Where-Object { $modsToInstallFinal -contains $_.Name }
-                }
-
-                # Proceed with installation
-                if ($modsToInstall.Count -gt 0) {
-                    try {
-                        foreach ($mod in $modsToInstall) {
-                            $modPath = $mod.FullName
-                            $modName = $mod.Name
-                            $backupDirectory = Join-Path -Path $gamePath -ChildPath "Backup"
-                            Install-Mod -ModName $modName -ModSourcePath $modPath -GameDirectory $gameDirectory -BackupDirectory $backupDirectory
-                        }
-                    } catch {
-                        Write-Error "An error occurred installing ${modName}: $_"
-                    }
-                } else {
-                    Write-Host "No mods to install." -ForegroundColor Cyan
-                }
-                Write-Host "All mods have been processed. Press any key to continue..."
-                [void][System.Console]::ReadKey($true)
-            } elseif ($modSelection -eq 'uninstall_all') {
-                $modsToUninstall = Get-ChildItem -LiteralPath $modParentPath -Directory | Where-Object { $_.Name -notmatch '^Backup-' }
-                foreach ($mod in $modsToUninstall) {
-                    $modPath = $mod.FullName
-                    $modName = $mod.Name
-                    $backupDirectory = Join-Path -Path $gamePath -ChildPath "Backup"
-                    $modInstalled = Is-Mod-Installed -ModPath $modPath -GameDirectory $gameDirectory
-
-                    if ($modInstalled) {
-                        try {
-                            Uninstall-Mod -ModName $modName -ModSourcePath $modPath -GameDirectory $gameDirectory -BackupDirectory $backupDirectory
-                        } catch {
-                            Write-Error "An error occurred uninstalling ${modName}: $_"
-                        }
-                    } else {
-                        Write-Host "$modName is not installed." -ForegroundColor Yellow
-                    }
-                }
-
-                Write-Host "All mods have been uninstalled. Press any key to continue..."
-                [void][System.Console]::ReadKey($true)
-            } else {
-                # The user selected a single mod
-                $modPath = $modSelection
-                $modName = Split-Path -Path $modPath -Leaf
-                $backupDirectory = Join-Path -Path $gamePath -ChildPath "Backup"
-                $modInstalled = Is-Mod-Installed -ModPath $modPath -GameDirectory $gameDirectory
-
-                try {
-                    if ($modInstalled) {
-                        Uninstall-Mod -ModName $modName -ModSourcePath $modPath -GameDirectory $gameDirectory -BackupDirectory $backupDirectory
-                    } else {
-                        # Get list of installed mods
-                        $installedMods = @(Get-Installed-Mods -GameDirectory $gameDirectory -ModParentPath $modParentPath)
-
-
-                        # Check for conflicts with installed mods
-                        $conflictingMods = Find-Mod-Conflicts-With-Installed -ModToInstall $modPath -InstalledMods $installedMods -ModParentPath $modParentPath
-
-                        if ($conflictingMods.Count -gt 0) {
-                            Write-Host "Conflicts detected with installed mods. Please resolve them." -ForegroundColor Red
-
-                            foreach ($conflict in $conflictingMods) {
-                                Write-Host "The mod '$modName' conflicts with the installed mod '$($conflict)'."
-                                $choice = Read-Host "Do you want to (1) Uninstall '$($conflict)' and install '$modName', (2) Cancel installation"
-                                if ($choice -eq '1') {
-                                    # Uninstall conflicting mod
-                                    $conflictingModPath = Join-Path -Path $modParentPath -ChildPath $conflict
-                                    Uninstall-Mod -ModName $conflict -ModSourcePath $conflictingModPath -GameDirectory $gameDirectory -BackupDirectory $backupDirectory
-                                    # Install selected mod
-                                    Install-Mod -ModName $modName -ModSourcePath $modPath -GameDirectory $gameDirectory -BackupDirectory $backupDirectory
-                                } else {
-                                    Write-Host "Installation of '$modName' canceled." -ForegroundColor Yellow
-                                }
-                            }
-                        } else {
-                            # No conflicts, proceed with installation
-                            Install-Mod -ModName $modName -ModSourcePath $modPath -GameDirectory $gameDirectory -BackupDirectory $backupDirectory
-                        }
-                    }
-                } catch {
-                    Write-Error "An error occurred: $_"
-                }
-
-                # Clear any remaining progress bars
-                Write-Progress -Activity "Operation" -Completed
-
-                Write-Host "Press any key to return to the mod selection menu..."
-                [void][System.Console]::ReadKey($true)
             }
         }
+
+        # Initialize progress bar
+        if ($totalFiles -gt 0) {
+            $ProgressBar.Minimum = 0
+            $ProgressBar.Maximum = $totalFiles
+            $ProgressBar.Value = 0
+        }
+
+        # Uninstall each mod and update progress bar incrementally
+        $filesProcessed = 0
+        foreach ($modItem in $selectedMods) {
+            $modName = $modItem.Name
+            UninstallModFromGUI -ModName $modName -GamesListBox $GamesListBox -ModParentsListBox $ModParentsListBox -ProgressBar $ProgressBar -StatusLabel $StatusLabel -FilesProcessed ([ref]$filesProcessed)
+        }
+
+        # Ensure the progress bar is set to 100% when done
+        $ProgressBar.Value = $ProgressBar.Maximum
+        $ProgressBar.Refresh()
+
+        # Wait a bit for user feedback and then reset the progress bar
+        Start-Sleep -Milliseconds 500
+        $ProgressBar.Value = 0
+        $ProgressBar.Refresh()
+
+        UpdateModsList $GamesListBox $ModParentsListBox $ModsListBox
+    } else {
+        Show-CustomMessageBox -Text "Please select at least one mod to uninstall." -Title "Information" -Buttons "OK"
     }
 }
+
+function InstallModFromGUI {
+    param (
+        [string]$ModName,
+        [System.Windows.Forms.ListBox]$GamesListBox,
+        [System.Windows.Forms.ListBox]$ModParentsListBox,
+        [System.Windows.Forms.ProgressBar]$ProgressBar,
+        [System.Windows.Forms.Label]$StatusLabel
+    )
+
+    $selectedGame = $GamesListBox.SelectedItem
+    $selectedModParent = $ModParentsListBox.SelectedItem
+
+    if (-not $selectedGame -or -not $selectedModParent) {
+        Show-CustomMessageBox -Text "Please select a game and mod parent directory." -Title "Information" -Buttons "OK"
+        return
+    }
+
+    $gamePath = Join-Path -Path $GamesPath -ChildPath $selectedGame
+    $modParentPath = Join-Path -Path $gamePath -ChildPath $selectedModParent
+    $modPath = Join-Path -Path $modParentPath -ChildPath $ModName
+
+    if (-not (Test-Path -LiteralPath $modPath)) {
+        Show-CustomMessageBox -Text "Mod path does not exist: $modPath" -Title "Error" -Buttons "OK"
+        return
+    }
+
+    # Determine game directory
+    if ($selectedModParent -eq "Core Mods") {
+        $gameDirectory = $Config['CoreGameDirectory']
+    } elseif ($selectedModParent -eq "Saved Games Mods") {
+        $gameDirectory = $Config['SavedGamesDirectory']
+    } else {
+        Show-CustomMessageBox -Text "Invalid mod parent directory." -Title "Error" -Buttons "OK"
+        return
+    }
+
+    $backupDirectory = Join-Path -Path $gamePath -ChildPath "Backup"
+    $modInstalled = Is-Mod-Installed -ModPath $modPath -GameDirectory $gameDirectory
+
+    if ($modInstalled) {
+        Show-CustomMessageBox -Text "Mod '$ModName' is already installed." -Title "Information" -Buttons "OK"
+        return
+    }
+
+    # Check for conflicts with installed mods
+    $installedMods = @(Get-Installed-Mods -GameDirectory $gameDirectory -ModParentPath $modParentPath)
+
+    $conflictingMods = Find-Mod-Conflicts-With-Installed -ModToInstall $modPath -InstalledMods $installedMods -ModParentPath $modParentPath
+
+    if ($conflictingMods.Count -gt 0) {
+        $conflictMessage = "The mod '$ModName' conflicts with the following installed mods:`n"
+        $conflictMessage += ($conflictingMods -join "`n")
+        $conflictMessage += "`nDo you want to uninstall them and proceed?"
+
+        $result = Show-CustomMessageBox -Text $conflictMessage -Title "Conflict Detected" -Buttons "YesNo"
+        if ($result -ne [System.Windows.Forms.DialogResult]::Yes) {
+            return
+        }
+
+        # Uninstall conflicting mods
+        foreach ($conflict in $conflictingMods) {
+            $conflictingModPath = Join-Path -Path $modParentPath -ChildPath $conflict
+            Uninstall-Mod -ModName $conflict -ModSourcePath $conflictingModPath -GameDirectory $gameDirectory -BackupDirectory $backupDirectory -ProgressBar $ProgressBar
+        }
+    }
+
+    # Install the mod
+    $StatusLabel.Text = "Installing mod: $ModName"
+    Install-Mod -ModName $ModName -ModSourcePath $modPath -GameDirectory $gameDirectory -BackupDirectory $backupDirectory -ProgressBar $ProgressBar
+    $StatusLabel.Text = "Installed mod: $ModName"
+}
+
+function UninstallModFromGUI {
+    param (
+        [string]$ModName,
+        [System.Windows.Forms.ListBox]$GamesListBox,
+        [System.Windows.Forms.ListBox]$ModParentsListBox,
+        [System.Windows.Forms.ProgressBar]$ProgressBar,
+        [System.Windows.Forms.Label]$StatusLabel,
+        [ref]$FilesProcessed
+    )
+
+    $selectedGame = $GamesListBox.SelectedItem
+    $selectedModParent = $ModParentsListBox.SelectedItem
+
+    if (-not $selectedGame -or -not $selectedModParent) {
+        Show-CustomMessageBox -Text "Please select a game and mod parent directory." -Title "Information" -Buttons "OK"
+        return
+    }
+
+    $gamePath = Join-Path -Path $GamesPath -ChildPath $selectedGame
+    $modParentPath = Join-Path -Path $gamePath -ChildPath $selectedModParent
+    $modPath = Join-Path -Path $modParentPath -ChildPath $ModName
+
+    if (-not (Test-Path -LiteralPath $modPath)) {
+        return  # Silently skip if mod path doesn't exist
+    }
+
+    # Determine game directory
+    if ($selectedModParent -eq "Core Mods") {
+        $gameDirectory = $Config['CoreGameDirectory']
+    } elseif ($selectedModParent -eq "Saved Games Mods") {
+        $gameDirectory = $Config['SavedGamesDirectory']
+    } else {
+        Show-CustomMessageBox -Text "Invalid mod parent directory." -Title "Error" -Buttons "OK"
+        return
+    }
+
+    $backupDirectory = Join-Path -Path $gamePath -ChildPath "Backup"
+    $modInstalled = Is-Mod-Installed -ModPath $modPath -GameDirectory $gameDirectory
+
+    # Silently skip if the mod is not installed
+    if (-not $modInstalled) {
+        return  # Just return, silently skipping the mod
+    }
+
+    # Uninstall the mod and update the progress bar
+    $StatusLabel.Text = "Uninstalling mod: $ModName"
+    Uninstall-Mod -ModName $ModName -ModSourcePath $modPath -GameDirectory $gameDirectory -BackupDirectory $backupDirectory -ProgressBar $ProgressBar -FilesProcessed $FilesProcessed
+    $StatusLabel.Text = "Uninstalled mod: $ModName"
+}
+
+# Start the GUI
+Initialize-GUI
