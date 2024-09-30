@@ -529,28 +529,33 @@ function Get-ScriptDirectory {
     return $scriptDir
 }
 
-# GUI Functions
 function Initialize-GUI {
+    # Add required assemblies
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+
     # Create the form
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "SymLink Advanced Modding for DCS"
-    $form.Size = New-Object System.Drawing.Size(800, 700)
+    $form.Size = New-Object System.Drawing.Size(800, 850)  # Increased form height
     $form.StartPosition = "CenterScreen"
     $form.MaximizeBox = $false
     $form.BackColor = [System.Drawing.Color]::FromArgb(30, 30, 30)
     $form.ForeColor = [System.Drawing.Color]::White
 
-    # Remove the FormClosed event handler to prevent the exception
-    # $form.Add_FormClosed({
-    #     # Exit the script when the form is closed
-    #     exit
-    # })
+    $form.Add_FormClosed({
+        Stop-Process -Id $PID -Force
+    })
+
+    # Define fonts
+    $headingFont = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
 
     # Label for games
     $labelGames = New-Object System.Windows.Forms.Label
     $labelGames.Text = "Available Games:"
     $labelGames.Location = New-Object System.Drawing.Point(10, 10)
-    $labelGames.Size = New-Object System.Drawing.Size(200, 20)
+    $labelGames.Size = New-Object System.Drawing.Size(120, 20)
+    $labelGames.Font = $headingFont
     $labelGames.BackColor = $form.BackColor
     $labelGames.ForeColor = $form.ForeColor
     $form.Controls.Add($labelGames)
@@ -558,65 +563,46 @@ function Initialize-GUI {
     # ListBox for games
     $listboxGames = New-Object System.Windows.Forms.ListBox
     $listboxGames.Location = New-Object System.Drawing.Point(10, 40)
-    $listboxGames.Size = New-Object System.Drawing.Size(200, 200)
+    $listboxGames.Width = 100  # Adjusted width
+    $listboxGames.Height = 200  # Set default height
     $listboxGames.BackColor = [System.Drawing.Color]::FromArgb(50, 50, 50)
     $listboxGames.ForeColor = [System.Drawing.Color]::White
-    # Remove custom drawing
-    # $listboxGames.DrawMode = [System.Windows.Forms.DrawMode]::OwnerDrawFixed
-    # $listboxGames.ItemHeight = 20
     $form.Controls.Add($listboxGames)
 
     # Label for mod parents
     $labelModParents = New-Object System.Windows.Forms.Label
     $labelModParents.Text = "Mod Parent Directories:"
-    $labelModParents.Location = New-Object System.Drawing.Point(220, 10)
-    $labelModParents.Size = New-Object System.Drawing.Size(200, 20)
+    $labelModParents.Location = New-Object System.Drawing.Point(130, 10)  # Moved to the right
+    $labelModParents.Size = New-Object System.Drawing.Size(160, 20)
+    $labelModParents.Font = $headingFont
     $labelModParents.BackColor = $form.BackColor
     $labelModParents.ForeColor = $form.ForeColor
     $form.Controls.Add($labelModParents)
 
     # ListBox for mod parents
     $listboxModParents = New-Object System.Windows.Forms.ListBox
-    $listboxModParents.Location = New-Object System.Drawing.Point(220, 40)
-    $listboxModParents.Size = New-Object System.Drawing.Size(200, 200)
+    $listboxModParents.Location = New-Object System.Drawing.Point(130, 40)  # Moved to the right
+    $listboxModParents.Width = 150  # Increased width
+    $listboxModParents.Height = 200  # Set default height
     $listboxModParents.BackColor = [System.Drawing.Color]::FromArgb(50, 50, 50)
     $listboxModParents.ForeColor = [System.Drawing.Color]::White
-    # Remove custom drawing
-    # $listboxModParents.DrawMode = [System.Windows.Forms.DrawMode]::OwnerDrawFixed
-    # $listboxModParents.ItemHeight = 20
     $form.Controls.Add($listboxModParents)
 
     # Label for mods
     $labelMods = New-Object System.Windows.Forms.Label
     $labelMods.Text = "Available Mods:"
-    $labelMods.Location = New-Object System.Drawing.Point(430, 10)
-    $labelMods.Size = New-Object System.Drawing.Size(200, 20)
+    $labelMods.Location = New-Object System.Drawing.Point(290, 10)  # Adjusted position
+    $labelMods.Size = New-Object System.Drawing.Size(150, 20)
+    $labelMods.Font = $headingFont
     $labelMods.BackColor = $form.BackColor
     $labelMods.ForeColor = $form.ForeColor
     $form.Controls.Add($labelMods)
 
-    # Checkbox for Select All
-    $checkboxSelectAll = New-Object System.Windows.Forms.CheckBox
-    $checkboxSelectAll.Text = "Select All"
-    $checkboxSelectAll.Location = New-Object System.Drawing.Point(640, 10)
-    $checkboxSelectAll.Size = New-Object System.Drawing.Size(100, 20)
-    $checkboxSelectAll.BackColor = $form.BackColor
-    $checkboxSelectAll.ForeColor = $form.ForeColor
-    $form.Controls.Add($checkboxSelectAll)
-
-    # Checkbox for sorting by installed status
-    $checkboxSortByInstalled = New-Object System.Windows.Forms.CheckBox
-    $checkboxSortByInstalled.Text = "Sort by Installed Status"
-    $checkboxSortByInstalled.Location = New-Object System.Drawing.Point(640, 40)
-    $checkboxSortByInstalled.Size = New-Object System.Drawing.Size(200, 20)
-    $checkboxSortByInstalled.BackColor = $form.BackColor
-    $checkboxSortByInstalled.ForeColor = $form.ForeColor
-    $form.Controls.Add($checkboxSortByInstalled)
-
     # ListBox for mods
     $listboxMods = New-Object System.Windows.Forms.ListBox
-    $listboxMods.Location = New-Object System.Drawing.Point(430, 40)
-    $listboxMods.Size = New-Object System.Drawing.Size(200, 200)
+    $listboxMods.Location = New-Object System.Drawing.Point(290, 40)  # Adjusted position
+    $listboxMods.Width = 300  # Adjusted width
+    $listboxMods.Height = 200  # Set default height same as mod parents
     $listboxMods.SelectionMode = "MultiSimple"
     $listboxMods.BackColor = [System.Drawing.Color]::FromArgb(50, 50, 50)
     $listboxMods.ForeColor = [System.Drawing.Color]::White
@@ -624,40 +610,84 @@ function Initialize-GUI {
     $listboxMods.ItemHeight = 20
     $form.Controls.Add($listboxMods)
 
-    # Open Mod Folder button
+    # Function to dynamically adjust ListBox height based on item count
+    function Adjust-ListBoxHeight($listBox, $maxHeight) {
+        $itemCount = $listBox.Items.Count
+        $desiredHeight = $itemCount * $listBox.ItemHeight + 4  # +4 for borders
+        if ($desiredHeight -gt $maxHeight) {
+            $desiredHeight = $maxHeight
+        }
+        if ($desiredHeight -lt 200) {
+            $desiredHeight = 200  # Set minimum/default height
+        }
+        $listBox.Height = $desiredHeight
+    }
+
+    # Set maximum heights for list boxes
+    $maxModsListHeight = 320  # Capped at 20% less than previous height
+
+    # Checkbox for Select All
+    $checkboxSelectAll = New-Object System.Windows.Forms.CheckBox
+    $checkboxSelectAll.Text = "Select All"
+    $checkboxSelectAll.Location = New-Object System.Drawing.Point(600, 10)  # Adjusted position
+    $checkboxSelectAll.Size = New-Object System.Drawing.Size(150, 20)
+    $checkboxSelectAll.BackColor = $form.BackColor
+    $checkboxSelectAll.ForeColor = $form.ForeColor
+    $form.Controls.Add($checkboxSelectAll)
+
+    # Checkbox for sorting by installed status
+    $checkboxSortByInstalled = New-Object System.Windows.Forms.CheckBox
+    $checkboxSortByInstalled.Text = "Sort by Installed Status"
+    $checkboxSortByInstalled.Location = New-Object System.Drawing.Point(600, 40)  # Adjusted position
+    $checkboxSortByInstalled.Size = New-Object System.Drawing.Size(180, 20)
+    $checkboxSortByInstalled.BackColor = $form.BackColor
+    $checkboxSortByInstalled.ForeColor = $form.ForeColor
+    $form.Controls.Add($checkboxSortByInstalled)
+
+    # Open Mod Directory button (adjusted width)
     $buttonOpenModFolder = New-Object System.Windows.Forms.Button
-    $buttonOpenModFolder.Text = "Open Mod Folder"
-    $buttonOpenModFolder.Location = New-Object System.Drawing.Point(10, 250)
-    $buttonOpenModFolder.Size = New-Object System.Drawing.Size(150, 30)
+    $buttonOpenModFolder.Text = "Open Mod Directory"
+    $buttonOpenModFolder.Location = New-Object System.Drawing.Point(600, 70)  # Adjusted position
+    $buttonOpenModFolder.Size = New-Object System.Drawing.Size(200, 30)
     $buttonOpenModFolder.BackColor = [System.Drawing.Color]::FromArgb(70, 70, 70)
     $buttonOpenModFolder.ForeColor = [System.Drawing.Color]::White
     $buttonOpenModFolder.FlatStyle = 'Flat'
     $form.Controls.Add($buttonOpenModFolder)
 
-    # Install button
+    # Install button (moved to right side and increased width)
     $buttonInstall = New-Object System.Windows.Forms.Button
     $buttonInstall.Text = "Install Selected Mods"
-    $buttonInstall.Location = New-Object System.Drawing.Point(220, 250)
-    $buttonInstall.Size = New-Object System.Drawing.Size(150, 30)
+    $buttonInstall.Location = New-Object System.Drawing.Point(600, 110)  # Adjusted position
+    $buttonInstall.Size = New-Object System.Drawing.Size(200, 30)
     $buttonInstall.BackColor = [System.Drawing.Color]::FromArgb(70, 70, 70)
     $buttonInstall.ForeColor = [System.Drawing.Color]::White
     $buttonInstall.FlatStyle = 'Flat'
     $form.Controls.Add($buttonInstall)
 
-    # Uninstall button
+    # Uninstall button (moved to right side and increased width)
     $buttonUninstall = New-Object System.Windows.Forms.Button
     $buttonUninstall.Text = "Uninstall Selected Mods"
-    $buttonUninstall.Location = New-Object System.Drawing.Point(430, 250)
-    $buttonUninstall.Size = New-Object System.Drawing.Size(150, 30)
+    $buttonUninstall.Location = New-Object System.Drawing.Point(600, 150)  # Adjusted position
+    $buttonUninstall.Size = New-Object System.Drawing.Size(200, 30)
     $buttonUninstall.BackColor = [System.Drawing.Color]::FromArgb(70, 70, 70)
     $buttonUninstall.ForeColor = [System.Drawing.Color]::White
     $buttonUninstall.FlatStyle = 'Flat'
     $form.Controls.Add($buttonUninstall)
 
+    # Add "Check for Updates" button (adjusted width)
+    $buttonCheckForUpdates = New-Object System.Windows.Forms.Button
+    $buttonCheckForUpdates.Text = "Check for Updates"
+    $buttonCheckForUpdates.Location = New-Object System.Drawing.Point(600, 190)  # Adjusted position
+    $buttonCheckForUpdates.Size = New-Object System.Drawing.Size(200, 30)
+    $buttonCheckForUpdates.BackColor = [System.Drawing.Color]::FromArgb(70, 70, 70)
+    $buttonCheckForUpdates.ForeColor = [System.Drawing.Color]::White
+    $buttonCheckForUpdates.FlatStyle = 'Flat'
+    $form.Controls.Add($buttonCheckForUpdates)
+
     # Progress Bar
     $progressBar = New-Object System.Windows.Forms.ProgressBar
-    $progressBar.Location = New-Object System.Drawing.Point(10, 300)
-    $progressBar.Size = New-Object System.Drawing.Size(760, 20)
+    $progressBar.Location = New-Object System.Drawing.Point(10, 360)
+    $progressBar.Size = New-Object System.Drawing.Size(780, 20)  # Adjusted width
     $progressBar.Minimum = 0
     $form.Controls.Add($progressBar)
 
@@ -670,7 +700,7 @@ function Initialize-GUI {
         $pictureBox = New-Object System.Windows.Forms.PictureBox
         $pictureBox.Image = $logoImage
         $pictureBox.SizeMode = 'Zoom'
-        $pictureBox.Location = New-Object System.Drawing.Point(275, 330)
+        $pictureBox.Location = New-Object System.Drawing.Point(275, 390)  # Adjusted position
         $pictureBox.Size = New-Object System.Drawing.Size(250, 250)
         $pictureBox.BackColor = $form.BackColor
         $form.Controls.Add($pictureBox)
@@ -679,16 +709,16 @@ function Initialize-GUI {
     # Status Label
     $labelStatus = New-Object System.Windows.Forms.Label
     $labelStatus.Text = "Status: Ready"
-    $labelStatus.Location = New-Object System.Drawing.Point(10, 590)
-    $labelStatus.Size = New-Object System.Drawing.Size(760, 20)
+    $labelStatus.Location = New-Object System.Drawing.Point(10, 660)  # Adjusted position
+    $labelStatus.Size = New-Object System.Drawing.Size(780, 20)  # Adjusted width
     $labelStatus.BackColor = $form.BackColor
     $labelStatus.ForeColor = $form.ForeColor
     $form.Controls.Add($labelStatus)
 
-    # Donation Link Label
+    # Donation Link Label (adjusted position)
     $linkLabelDonate = New-Object System.Windows.Forms.LinkLabel
     $linkLabelDonate.Text = "Donate/support the developer"
-    $linkLabelDonate.Location = New-Object System.Drawing.Point(300, 620)
+    $linkLabelDonate.Location = New-Object System.Drawing.Point(300, 690)  # Adjusted position
     $linkLabelDonate.Size = New-Object System.Drawing.Size(200, 20)
     $linkLabelDonate.BackColor = $form.BackColor
     $linkLabelDonate.LinkColor = [System.Drawing.Color]::LightBlue
@@ -717,10 +747,12 @@ function Initialize-GUI {
     # Event handlers
     $listboxGames.Add_SelectedIndexChanged({
         UpdateModsList $listboxGames $listboxModParents $listboxMods
+        Adjust-ListBoxHeight $listboxMods $maxModsListHeight
     })
 
     $listboxModParents.Add_SelectedIndexChanged({
         UpdateModsList $listboxGames $listboxModParents $listboxMods
+        Adjust-ListBoxHeight $listboxMods $maxModsListHeight
     })
 
     $buttonInstall.Add_Click({
@@ -747,15 +779,36 @@ function Initialize-GUI {
     # Event handler for Sort by Installed Status checkbox
     $checkboxSortByInstalled.Add_CheckedChanged({
         UpdateModsList $listboxGames $listboxModParents $listboxMods
+        Adjust-ListBoxHeight $listboxMods $maxModsListHeight
     })
 
-    # Event handler for Open Mod Folder button
+    # Event handler for Open Mod Directory button
     $buttonOpenModFolder.Add_Click({
         $modFolderPath = Join-Path -Path $scriptDir -ChildPath "Games\DCS"
         if (Test-Path -LiteralPath $modFolderPath) {
             Start-Process "explorer.exe" -ArgumentList "`"$modFolderPath`""
         } else {
             Show-CustomMessageBox -Text "Mod folder does not exist: $modFolderPath" -Title "Error" -Buttons "OK"
+        }
+    })
+
+    # Event handler for "Check for Updates" button
+    $buttonCheckForUpdates.Add_Click({
+        # Set status label
+        $labelStatus.Text = "Checking for updates..."
+
+        # Execute git pull command
+        $gitResult = & git pull origin main
+
+        # Check the result and provide feedback
+        if ($gitResult -match "Already up to date.") {
+            $labelStatus.Text = "Already up to date."
+        } else {
+            $labelStatus.Text = "Update applied. Restarting..."
+
+            # Restart the script
+            Start-Process -FilePath "powershell.exe" -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$($MyInvocation.PSCommandPath)`""
+            exit
         }
     })
 
@@ -784,18 +837,12 @@ function Initialize-GUI {
                 $e.Graphics.FillRectangle((New-Object System.Drawing.SolidBrush $backColor), $e.Bounds)
                 $textFont = $e.Font
 
-                # Access properties directly
-                $boundsX = $e.Bounds.X
-                $boundsY = $e.Bounds.Y
-                $boundsWidth = $e.Bounds.Width
-                $boundsHeight = $e.Bounds.Height
-
                 # Create RectangleF for DrawString
                 $textBounds = New-Object System.Drawing.RectangleF(
-                    [float]($boundsX + 2),
-                    [float]$boundsY,
-                    [float]($boundsWidth - 4),
-                    [float]$boundsHeight
+                    [float]($e.Bounds.X + 2),
+                    [float]$e.Bounds.Y,
+                    [float]($e.Bounds.Width - 4),
+                    [float]$e.Bounds.Height
                 )
 
                 $textBrush = New-Object System.Drawing.SolidBrush $foreColor
@@ -807,6 +854,9 @@ function Initialize-GUI {
             Show-CustomMessageBox -Text "Error in drawing mod item: $_" -Title "Error" -Buttons "OK"
         }
     })
+
+    # Initial adjustment of list box heights
+    Adjust-ListBoxHeight $listboxMods $maxModsListHeight
 
     # Show the form
     $form.ShowDialog() | Out-Null
