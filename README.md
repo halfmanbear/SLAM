@@ -1,7 +1,7 @@
 <p align="center">
   <img src="images/logo.png" width="350" alt="SLAM Logo">
   <h1 align="center">SLAM</h1>
-  <h1 align="center">SymLink Advanced Mod-manager for DCS</h1>
+  <h1 align="center">SymLink Advanced Mod-manager for DCS [New GUI]</h1>
 </p>
 
 ---
