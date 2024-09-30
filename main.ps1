@@ -913,7 +913,7 @@ function Load-Configuration {
         Set-Content -Path $configFilePath -Value $configLines
 
         # Restart the script to load new configuration
-        Start-Process -FilePath "powershell.exe" -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$($MyInvocation.PSCommandPath)`""
+        Stop-Process -Id $PID -Force
         exit
     }
 
