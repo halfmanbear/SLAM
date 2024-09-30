@@ -10,27 +10,14 @@
 #       - SymLink Advanced Modding for DCS -               #
 ############################################################
 
-# Core / Saved Games directory paths;
-#
-# For DCS World (Release Version):
-# CoreGameDirectory=C:\Program Files\Eagle Dynamics\DCS World
-# SavedGamesDirectory=%USERPROFILE%\Saved Games\DCS
-#
-# For DCS World OpenBeta:
-# CoreGameDirectory=C:\Program Files\Eagle Dynamics\DCS World OpenBeta
-# SavedGamesDirectory=%USERPROFILE%\Saved Games\DCS.openbeta
-#
-# For DCS World Steam Version:
-# CoreGameDirectory=C:\Program Files (x86)\Steam\steamapps\common\DCSWorld
-# SavedGamesDirectory=%USERPROFILE%\Saved Games\DCS
-#
+CoreGameDirectory=
+SavedGamesDirectory=
+
 # Backup directory path:
 # If left blank, the default backup directory is "<SLAM directory>\Backup"
 # Otherwise, you can specify an absolute path, e.g., "BackupDirectory=D:\GameBackupFiles"
 # Note: This must only be changed before applying mods or when all mods are toggled OFF!!!
 
-CoreGameDirectory=C:\Program Files\Eagle Dynamics\DCS World
-
-SavedGamesDirectory=%USERPROFILE%\Saved Games\DCS
-
 BackupDirectory=
+
+
