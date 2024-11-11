@@ -804,11 +804,10 @@ function Initialize-GUI {
         if ($gitResult -match "Already up to date.") {
             $labelStatus.Text = "Already up to date."
         } else {
-            $labelStatus.Text = "Update applied. Restarting..."
+            $labelStatus.Text = "Update applied. Exiting..."
 
-            # Restart the script
-            Start-Process -FilePath "powershell.exe" -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$($MyInvocation.PSCommandPath)`""
-            exit
+            # Exit the script
+            Stop-Process -Id $PID -Force
         }
     })
 
