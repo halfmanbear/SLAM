@@ -15,7 +15,7 @@ DisableDirPage=no
 
 [Run]
 Filename: "explorer.exe"; Parameters: "{app}"; Flags: postinstall nowait; Description: "Open installation folder"
-Filename: "{app}\config.txt"; Flags: postinstall shellexec; Description: "Open config.txt"
+; Filename: "{app}\config.txt"; Flags: postinstall shellexec; Description: "Open config.txt"
 
 [Code]
 const
