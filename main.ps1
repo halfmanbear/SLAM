@@ -794,20 +794,20 @@ function Initialize-GUI {
 
     # Event handler for "Check for Updates" button
     $buttonCheckForUpdates.Add_Click({
-        # Set status label
-        $labelStatus.Text = "Checking for updates..."
+        $labelStatus.Text = "Checking for updates…"
 
-        # Execute git pull command
-        $gitResult = & git pull origin main
+        # Run git in the script folder
+        $gitResult = git -C $PSScriptRoot pull origin main 2>&1
 
-        # Check the result and provide feedback
         if ($gitResult -match "Already up to date.") {
             $labelStatus.Text = "Already up to date."
-        } else {
-            $labelStatus.Text = "Update applied. Exiting..."
-
-            # Exit the script
+        }
+        elseif ($gitResult -match "Updating") {
+            $labelStatus.Text = "Update applied. Exiting…"
             Stop-Process -Id $PID -Force
+        }
+        else {
+            $labelStatus.Text = "Update failed: $($gitResult -join ' ')"
         }
     })
 
