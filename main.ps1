@@ -781,34 +781,73 @@ function Initialize-GUI {
         UpdateModsList $listboxGames $listboxModParents $listboxMods
         Adjust-ListBoxHeight $listboxMods $maxModsListHeight
     })
-
-    # Event handler for Open Mod Directory button
-    $buttonOpenModFolder.Add_Click({
-        $modFolderPath = Join-Path -Path $scriptDir -ChildPath "Games\DCS"
-        if (Test-Path -LiteralPath $modFolderPath) {
-            Start-Process "explorer.exe" -ArgumentList "`"$modFolderPath`""
-        } else {
-            Show-CustomMessageBox -Text "Mod folder does not exist: $modFolderPath" -Title "Error" -Buttons "OK"
-        }
-    })
-
-    # Event handler for "Check for Updates" button
+    
     $buttonCheckForUpdates.Add_Click({
+        # 1. Show “checking” status and repaint UI
         $labelStatus.Text = "Checking for updates…"
+        [System.Windows.Forms.Application]::DoEvents()
 
-        # Run git in the script folder
-        $gitResult = git -C $PSScriptRoot pull origin main 2>&1
+        # 2. Make Git trust this folder
+        git -C $PSScriptRoot config --global --add safe.directory "$PSScriptRoot" 2>$null | Out-Null
 
-        if ($gitResult -match "Already up to date.") {
+        # 3. Stash only config.txt so user edits are preserved
+        git -C $PSScriptRoot stash push --include-untracked -- config.txt 2>$null | Out-Null
+
+        # 4. Fetch latest from origin/main
+        git -C $PSScriptRoot fetch origin main 2>&1 | Out-Null
+
+        # 5. Compare remote vs local HEAD
+        $remoteHash = git -C $PSScriptRoot rev-parse origin/main 2>&1
+        $localHash  = git -C $PSScriptRoot rev-parse HEAD        2>&1
+
+        if ($remoteHash -eq $localHash) {
+            # Nothing to do
             $labelStatus.Text = "Already up to date."
+            [System.Windows.Forms.Application]::DoEvents()
+            # Restore config.txt if we stashed it
+            git -C $PSScriptRoot stash pop 2>$null | Out-Null
+            return
         }
-        elseif ($gitResult -match "Updating") {
-            $labelStatus.Text = "Update applied. Exiting…"
-            Stop-Process -Id $PID -Force
+
+        # 6. Prompt user to proceed (warns SLAM will close)
+        $msg = @"
+    An update is available.
+
+        Note: applying it will Close SLAM, requiring it to be manually ran again.
+
+    Proceed?
+"@
+
+        $resp = [System.Windows.Forms.MessageBox]::Show(
+            $msg,
+            "Update Available",
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
+        )
+
+        if ($resp -ne [System.Windows.Forms.DialogResult]::Yes) {
+            # User chose not to update
+            $labelStatus.Text = "Update canceled."
+            [System.Windows.Forms.Application]::DoEvents()
+            git -C $PSScriptRoot stash pop 2>$null | Out-Null
+            return
         }
-        else {
-            $labelStatus.Text = "Update failed: $($gitResult -join ' ')"
-        }
+
+        # 7. Discard all other local changes and clean untracked files
+        git -C $PSScriptRoot reset --hard origin/main 2>&1 | Out-Null
+        git -C $PSScriptRoot clean -fd               2>&1 | Out-Null
+
+        # 8. Pull down the latest commits
+        git -C $PSScriptRoot pull origin main         2>&1 | Out-Null
+
+        # 9. Restore the user's config.txt
+        git -C $PSScriptRoot stash pop                2>&1 | Out-Null
+
+        # 10. Notify and exit so user can relaunch updated SLAM
+        $labelStatus.Text = "Update applied. Restarting…"
+        [System.Windows.Forms.Application]::DoEvents()
+        Start-Sleep -Milliseconds 200
+        Stop-Process -Id $PID -Force
     })
 
     # DrawItem event handler for mods
