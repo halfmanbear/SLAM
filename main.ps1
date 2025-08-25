@@ -107,33 +107,63 @@ function Move-File-With-Metadata {
     }
 }
 
-# Optimized Function to remove empty directories recursively
-function Remove-EmptyDirectories {
+# Remove only the empty directories under the chosen target root
+# that correspond to the mod's own folder layout.
+function Remove-EmptyModDirectories {
     [CmdletBinding()]
     param (
-        [Parameter(Mandatory = $true)][string]$RootPath
+        [Parameter(Mandatory=$true)] [string] $ModSourcePath,
+        # This is the root the mod was installed to (either Core Game or Saved Games)
+        [Parameter(Mandatory=$true)] [string] $TargetRootPath
     )
 
-    $totalDirsRemoved = 0
+    # Normalize paths
+    $ModSourcePath  = (Resolve-Path -LiteralPath $ModSourcePath).Path.TrimEnd('\','/')
+    $TargetRootPath = (Resolve-Path -LiteralPath $TargetRootPath).Path.TrimEnd('\','/')
 
-    function Remove-EmptyDirsRecursively($path) {
-        $subDirs = [System.IO.Directory]::GetDirectories($path)
-        foreach ($dir in $subDirs) {
-            Remove-EmptyDirsRecursively $dir
+    # Gather all directories present in the mod (deepest-first)
+    $dirs = @(Get-ChildItem -LiteralPath $ModSourcePath -Recurse -Directory -Force |
+              Sort-Object FullName -Descending)
+
+    # First pass: delete leaf dirs that are already empty
+    foreach ($srcDir in $dirs) {
+        $relative = $srcDir.FullName.Substring($ModSourcePath.Length).TrimStart('\','/')
+        if ([string]::IsNullOrWhiteSpace($relative)) { continue } # never touch the TargetRoot itself
+
+        $targetDir = Join-Path -Path $TargetRootPath -ChildPath $relative
+        if (-not (Test-Path -LiteralPath $targetDir -PathType Container)) { continue }
+
+        $hasEntries = $true
+        try {
+            $hasEntries = [System.IO.Directory]::EnumerateFileSystemEntries($targetDir).GetEnumerator().MoveNext()
+        } catch {
+            $hasEntries = $true # play safe if we cannot enumerate
         }
 
-        $entries = [System.IO.Directory]::EnumerateFileSystemEntries($path)
-        if ($entries.Count -eq 0) {
-            try {
-                [System.IO.Directory]::Delete($path)
-                $totalDirsRemoved++
-            } catch {
-                # Handle exceptions if necessary
-            }
+        if (-not $hasEntries) {
+            try { Remove-Item -LiteralPath $targetDir -Force -ErrorAction Stop } catch {}
         }
     }
 
-    Remove-EmptyDirsRecursively $RootPath
+    # Second pass (still deepest-first): parents may now be empty after leaf deletion
+    foreach ($srcDir in ($dirs | Sort-Object FullName -Descending)) {
+        $relative = $srcDir.FullName.Substring($ModSourcePath.Length).TrimStart('\','/')
+        if ([string]::IsNullOrWhiteSpace($relative)) { continue }
+
+        $targetDir = Join-Path -Path $TargetRootPath -ChildPath $relative
+        if (-not (Test-Path -LiteralPath $targetDir -PathType Container)) { continue }
+
+        $hasEntries = $true
+        try {
+            $hasEntries = [System.IO.Directory]::EnumerateFileSystemEntries($targetDir).GetEnumerator().MoveNext()
+        } catch {
+            $hasEntries = $true
+        }
+
+        if (-not $hasEntries) {
+            try { Remove-Item -LiteralPath $targetDir -Force -ErrorAction Stop } catch {}
+        }
+    }
 }
 
 # Function to read the configuration file
@@ -272,7 +302,7 @@ function Uninstall-Mod {
     param (
         [string]$ModName,
         [string]$ModSourcePath,
-        [string]$GameDirectory,
+        [string]$GameDirectory,        # <- pass in the correct root (Core OR Saved) when calling
         [string]$BackupDirectory,
         [System.Windows.Forms.ProgressBar]$ProgressBar,
         [ref]$FilesProcessed
@@ -286,9 +316,10 @@ function Uninstall-Mod {
         $totalFiles = $files.Count
 
         foreach ($file in $files) {
-            $relativePath = $file.FullName.Substring($backupDir.Length).TrimStart("\")
+            $relativePath   = $file.FullName.Substring($backupDir.Length).TrimStart("\")
             $targetFilePath = Join-Path -Path $GameDirectory -ChildPath $relativePath
 
+            # If a symlink is still there, remove it first
             Remove-SymbolicLink -Path $targetFilePath
 
             # Ensure target directory exists
@@ -297,10 +328,10 @@ function Uninstall-Mod {
                 New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
             }
 
-            # Move backup file back to original location
+            # Move backup file back to original location (preserves metadata via WinAPI)
             Move-File-With-Metadata -SourcePath $file.FullName -DestinationPath $targetFilePath
 
-            # Increment files processed and update progress bar
+            # Progress
             $FilesProcessed.Value++
             if ($ProgressBar) {
                 $ProgressBar.Value = [Math]::Min($FilesProcessed.Value, $ProgressBar.Maximum)
@@ -308,16 +339,19 @@ function Uninstall-Mod {
             }
         }
 
-        # Remove backup directory
+        # Remove backup directory when done
         Remove-Item -LiteralPath $backupDir -Recurse -Force
     }
 
-    # Remove any remaining symbolic links
+    # Remove any remaining symbolic links for this mod within the chosen root
     Remove-Links-Directly -GameDirectory $GameDirectory -ModSourcePath $ModSourcePath
 
-    # Clean up empty directories
-    Remove-EmptyDirectories -RootPath $GameDirectory
+    # Clean up only empty directories that correspond to the mod's own folder layout
+    # This targets whichever root was used for this mod (Core Game OR Saved Games),
+    # because $GameDirectory is passed in as that root by the caller.
+    Remove-EmptyModDirectories -ModSourcePath $ModSourcePath -TargetRootPath $GameDirectory
 }
+
 
 # Function to find mod conflicts at the mod level
 function Find-Mod-Conflicts {
@@ -781,7 +815,51 @@ function Initialize-GUI {
         UpdateModsList $listboxGames $listboxModParents $listboxMods
         Adjust-ListBoxHeight $listboxMods $maxModsListHeight
     })
-    
+
+    # Open Mod Directory button handler (label->path resolver)
+    $buttonOpenModFolder.Add_Click({
+        try {
+            # Must have a Mod Parent selection
+            if (-not $listboxModParents.SelectedItem) {
+                Show-CustomMessageBox -Text "Please select a Mod Parent directory first." -Title "Open Mod Directory" -Buttons "OK"
+                return
+            }
+
+            # Resolve selected parent label to a real path under the repo's Games\DCS root
+            $scriptDir = $script:scriptDir  # set in Initialize-GUI / Load-Configuration
+            $parentsRoot = Join-Path $scriptDir 'Games\DCS'
+
+            $selectedLabel = $listboxModParents.SelectedItem.ToString()
+            $parentDir = Get-ChildItem -LiteralPath $parentsRoot -Directory -Force |
+                         Where-Object { $_.Name -eq $selectedLabel } |
+                         Select-Object -First 1
+
+            if (-not $parentDir) {
+                Show-CustomMessageBox -Text "Could not resolve a path for:`n$selectedLabel" -Title "Open Mod Directory" -Buttons "OK"
+                return
+            }
+
+            $openPath = $parentDir.FullName
+
+            # If exactly one mod is selected, open that mod's subfolder
+            if ($listboxMods.SelectedItems.Count -eq 1) {
+                $selectedMod = $listboxMods.SelectedItems[0]  # ModItem
+                $candidate = Join-Path -Path $openPath -ChildPath $selectedMod.Name
+                if (Test-Path -LiteralPath $candidate) { $openPath = $candidate }
+            }
+
+            if (-not (Test-Path -LiteralPath $openPath)) {
+                Show-CustomMessageBox -Text "Path not found:`n$openPath" -Title "Open Mod Directory" -Buttons "OK"
+                return
+            }
+
+            Start-Process -FilePath "explorer.exe" -ArgumentList "`"$openPath`""
+        }
+        catch {
+            Show-CustomMessageBox -Text "Failed to open folder:`n$_" -Title "Open Mod Directory" -Buttons "OK"
+        }
+    })
+
     $buttonCheckForUpdates.Add_Click({
         # 1. Show “checking” status and repaint UI
         $labelStatus.Text = "Checking for updates…"
