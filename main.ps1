@@ -13,10 +13,12 @@ function Hide-ConsoleWindow {
 
 # Get console window handle
 function Get-ConsoleWindow {
-    Add-Type -Namespace Win32 -Name NativeMethods -MemberDefinition @"
-    [DllImport("kernel32.dll")]
-    public static extern IntPtr GetConsoleWindow();
+    if (-not ([System.Management.Automation.PSTypeName]'Win32.NativeMethods').Type) {
+        Add-Type -Namespace Win32 -Name NativeMethods -MemberDefinition @"
+        [DllImport("kernel32.dll")]
+        public static extern IntPtr GetConsoleWindow();
 "@
+    }
     [Win32.NativeMethods]::GetConsoleWindow()
 }
 
@@ -26,49 +28,60 @@ function ShowWindowAsync {
         [IntPtr]$hWnd,
         [int]$nCmdShow
     )
-    Add-Type -Namespace Win32 -Name NativeMethods2 -MemberDefinition @"
-    [DllImport("user32.dll")]
-    public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+    if (-not ([System.Management.Automation.PSTypeName]'Win32.NativeMethods2').Type) {
+        Add-Type -Namespace Win32 -Name NativeMethods2 -MemberDefinition @"
+        [DllImport("user32.dll")]
+        public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
 "@
+    }
     [Win32.NativeMethods2]::ShowWindowAsync($hWnd, $nCmdShow) | Out-Null
 }
 
 # Hide the console window
 Hide-ConsoleWindow
 
-# Enable long path support
+# Enable long path support (requires admin)
 function Enable-LongPaths {
-    Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -Force
+    try {
+        Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -Force -ErrorAction Stop
+    } catch {
+        # Silently continue - user may not have admin rights or it's already set
+        Write-Verbose "Could not enable long paths (may require admin): $_"
+    }
 }
 Enable-LongPaths
 
 # Windows API Functions for File Operations
-Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-public class WinAPI {
-    [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Auto)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool DeleteFile(string path);
+if (-not ([System.Management.Automation.PSTypeName]'WinAPI').Type) {
+    Add-Type -TypeDefinition @"
+    using System;
+    using System.Runtime.InteropServices;
+    public class WinAPI {
+        [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Auto)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool DeleteFile(string path);
 
-    [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Auto)]
-    public static extern bool MoveFile(string lpExistingFileName, string lpNewFileName);
-}
+        [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Auto)]
+        public static extern bool MoveFile(string lpExistingFileName, string lpNewFileName);
+    }
 "@
+}
 
 # Define the ModItem class
-Add-Type -TypeDefinition @"
-using System;
+if (-not ([System.Management.Automation.PSTypeName]'ModItem').Type) {
+    Add-Type -TypeDefinition @"
+    using System;
 
-public class ModItem {
-    public string Name { get; set; }
-    public bool IsInstalled { get; set; }
+    public class ModItem {
+        public string Name { get; set; }
+        public bool IsInstalled { get; set; }
 
-    public override string ToString() {
-        return Name;
+        public override string ToString() {
+            return Name;
+        }
     }
-}
 "@
+}
 
 # Helper Functions
 function New-SymbolicLink {
@@ -176,7 +189,7 @@ function Read-Config {
     if (Test-Path -LiteralPath $ConfigFilePath) {
         Get-Content -LiteralPath $ConfigFilePath | ForEach-Object {
             $_ = $_.Trim()
-            if ($_.Length -gt 0 -and $_.Substring(0, 1) -ne '#') {
+            if ($_.Length -gt 0 -and -not $_.StartsWith('#')) {
                 $parts = $_ -split '='
                 if ($parts.Length -eq 2) {
                     $key = $parts[0].Trim()
@@ -200,7 +213,7 @@ function Is-Mod-Installed {
         [Parameter(Mandatory = $true)][string]$GameDirectory
     )
 
-    $sampleFile = Get-ChildItem -LiteralPath $ModPath -Recurse -File | Select-Object -First 1
+    $sampleFile = Get-ChildItem -LiteralPath $ModPath -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($sampleFile) {
         $relativePath = $sampleFile.FullName.Substring($ModPath.Length).TrimStart("\")
         $linkPath = Join-Path -Path $GameDirectory -ChildPath $relativePath
@@ -222,16 +235,31 @@ function Remove-Links-Directly {
         [Parameter(Mandatory = $true)][string]$GameDirectory,
         [Parameter(Mandatory = $true)][string]$ModSourcePath
     )
-
-    $symlinkPaths = Get-ChildItem -Recurse -Force -LiteralPath $GameDirectory | Where-Object { $_.Attributes -band [System.IO.FileAttributes]::ReparsePoint } | Select-Object -ExpandProperty FullName
-
-    foreach ($symlinkPath in $symlinkPaths) {
-        $relativePath = $symlinkPath.Substring($GameDirectory.Length).TrimStart("\")
-        $sourceFilePath = Join-Path -Path $ModSourcePath -ChildPath $relativePath
-
-        if (Test-Path -LiteralPath $sourceFilePath) {
-            Remove-SymbolicLink -Path $symlinkPath
+    
+    try {
+        if (-not (Test-Path -LiteralPath $GameDirectory)) {
+            Write-Warning "Game directory not found: $GameDirectory"
+            return
         }
+
+        $symlinkPaths = Get-ChildItem -Recurse -Force -LiteralPath $GameDirectory -ErrorAction SilentlyContinue | 
+            Where-Object { $_.Attributes -band [System.IO.FileAttributes]::ReparsePoint } | 
+            Select-Object -ExpandProperty FullName
+
+        foreach ($symlinkPath in $symlinkPaths) {
+            try {
+                $relativePath = $symlinkPath.Substring($GameDirectory.Length).TrimStart("\")
+                $sourceFilePath = Join-Path -Path $ModSourcePath -ChildPath $relativePath
+
+                if (Test-Path -LiteralPath $sourceFilePath) {
+                    Remove-SymbolicLink -Path $symlinkPath
+                }
+            } catch {
+                Write-Verbose "Could not remove symlink: $symlinkPath - $_"
+            }
+        }
+    } catch {
+        Write-Warning "Error in Remove-Links-Directly: $_"
     }
 }
 
@@ -405,7 +433,14 @@ function Get-Installed-Mods {
     )
 
     $installedMods = @()
-    $modDirs = Get-ChildItem -LiteralPath $ModParentPath -Directory | Where-Object { $_.Name -notmatch '^Backup-' }
+    
+    if (-not (Test-Path -LiteralPath $ModParentPath)) {
+        Write-Warning "Mod parent path not found: $ModParentPath"
+        return $installedMods
+    }
+    
+    $modDirs = Get-ChildItem -LiteralPath $ModParentPath -Directory -ErrorAction SilentlyContinue | 
+        Where-Object { $_.Name -notmatch '^Backup' }
 
     foreach ($modDir in $modDirs) {
         $modPath = $modDir.FullName
@@ -861,7 +896,7 @@ function Initialize-GUI {
     })
 
     $buttonCheckForUpdates.Add_Click({
-        # 1. Show “checking” status and repaint UI
+        # 1. Show "checking" status and repaint UI
         $labelStatus.Text = "Checking for updates…"
         [System.Windows.Forms.Application]::DoEvents()
 
@@ -998,52 +1033,53 @@ function Load-Configuration {
         if ($folderBrowser.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
             $Config['CoreGameDirectory'] = $folderBrowser.SelectedPath
             $configUpdated = $true
-        } else {
-            Show-CustomMessageBox -Text "CoreGameDirectory is required. Exiting." -Title "Error" -Buttons "OK"
-            exit
         }
     }
 
     if (-not $Config.ContainsKey('SavedGamesDirectory') -or [string]::IsNullOrEmpty($Config['SavedGamesDirectory'])) {
         # Show custom message
-        Show-CustomMessageBox -Text "Please locate your [Saved Games / DCS] directory. The default path is 'User\Saved Games\DCS'." -Title "Select Saved Games Directory" -Buttons "OK"
+        Show-CustomMessageBox -Text "Please locate your [Saved Games / DCS] folder. The default path is usually '%USERPROFILE%\Saved Games\DCS'." -Title "Select Saved Games Directory" -Buttons "OK"
 
         $folderBrowser = New-Object System.Windows.Forms.FolderBrowserDialog
         $folderBrowser.Description = "Select Saved Games Directory"
-        $folderBrowser.SelectedPath = Join-Path -Path $env:USERPROFILE -ChildPath "Saved Games\"
+        $defaultPath = Join-Path -Path $env:USERPROFILE -ChildPath "Saved Games"
+        if (Test-Path -LiteralPath $defaultPath) {
+            $folderBrowser.SelectedPath = $defaultPath
+        }
         if ($folderBrowser.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
             $Config['SavedGamesDirectory'] = $folderBrowser.SelectedPath
             $configUpdated = $true
-        } else {
-            Show-CustomMessageBox -Text "SavedGamesDirectory is required. Exiting." -Title "Error" -Buttons "OK"
-            exit
         }
     }
 
     if ($configUpdated) {
-        # Save the updated configuration back to config.txt
+        # Save configuration
         $configLines = @()
+        $configLines += "# Configuration file for SLAM"
         foreach ($key in $Config.Keys) {
-            $configLines += "$key=$($Config[$key])"
+            $value = $Config[$key]
+            $configLines += "$key=$value"
         }
-        Set-Content -Path $configFilePath -Value $configLines
-
-        # Restart the script to load new configuration
-        Stop-Process -Id $PID -Force
-        exit
+        Set-Content -LiteralPath $configFilePath -Value $configLines
     }
-
-    $script:GamesPath = Join-Path -Path $scriptDir -ChildPath 'Games'
 }
 
 function Populate-GamesList {
     param (
         [System.Windows.Forms.ListBox]$ListBox
     )
-    $games = Get-ChildItem -LiteralPath $GamesPath -Directory
-    $ListBox.Items.Clear()
-    foreach ($game in $games) {
-        $ListBox.Items.Add($game.Name)
+    $scriptDir = Get-ScriptDirectory
+    $gamesPath = Join-Path -Path $scriptDir -ChildPath 'Games'
+    $script:GamesPath = $gamesPath
+
+    if (Test-Path -LiteralPath $gamesPath) {
+        $gameDirs = Get-ChildItem -LiteralPath $gamesPath -Directory
+        foreach ($gameDir in $gameDirs) {
+            $ListBox.Items.Add($gameDir.Name) | Out-Null
+        }
+        if ($ListBox.Items.Count -gt 0) {
+            $ListBox.SelectedIndex = 0
+        }
     }
 }
 
@@ -1073,7 +1109,7 @@ function UpdateModsList {
         $modParentPath = Join-Path -Path $gamePath -ChildPath $selectedModParent
 
         if (Test-Path -LiteralPath $modParentPath) {
-            $mods = Get-ChildItem -LiteralPath $modParentPath -Directory | Where-Object { $_.Name -notmatch '^Backup-' }
+            $mods = Get-ChildItem -LiteralPath $modParentPath -Directory | Where-Object { $_.Name -notmatch '^Backup' }
 
             # Determine game directory
             if ($selectedModParent -eq "Core Mods") {
@@ -1145,49 +1181,10 @@ function UninstallSelectedMods {
 
     $selectedMods = $ModsListBox.SelectedItems
     if ($selectedMods.Count -gt 0) {
-        $totalFiles = 0
-
-        # Calculate the total number of files across all selected mods
         foreach ($modItem in $selectedMods) {
             $modName = $modItem.Name
-            $selectedGame = $GamesListBox.SelectedItem
-            $selectedModParent = $ModParentsListBox.SelectedItem
-
-            if ($selectedGame -and $selectedModParent) {
-                $gamePath = Join-Path -Path $GamesPath -ChildPath $selectedGame
-                $modParentPath = Join-Path -Path $gamePath -ChildPath $selectedModParent
-                $modPath = Join-Path -Path $modParentPath -ChildPath $modName
-
-                # Count files in this mod
-                if (Test-Path -LiteralPath $modPath) {
-                    $totalFiles += (Get-ChildItem -LiteralPath $modPath -Recurse -File).Count
-                }
-            }
+            UninstallModFromGUI -ModName $modName -GamesListBox $GamesListBox -ModParentsListBox $ModParentsListBox -ProgressBar $ProgressBar -StatusLabel $StatusLabel
         }
-
-        # Initialize progress bar
-        if ($totalFiles -gt 0) {
-            $ProgressBar.Minimum = 0
-            $ProgressBar.Maximum = $totalFiles
-            $ProgressBar.Value = 0
-        }
-
-        # Uninstall each mod and update progress bar incrementally
-        $filesProcessed = 0
-        foreach ($modItem in $selectedMods) {
-            $modName = $modItem.Name
-            UninstallModFromGUI -ModName $modName -GamesListBox $GamesListBox -ModParentsListBox $ModParentsListBox -ProgressBar $ProgressBar -StatusLabel $StatusLabel -FilesProcessed ([ref]$filesProcessed)
-        }
-
-        # Ensure the progress bar is set to 100% when done
-        $ProgressBar.Value = $ProgressBar.Maximum
-        $ProgressBar.Refresh()
-
-        # Wait a bit for user feedback and then reset the progress bar
-        Start-Sleep -Milliseconds 500
-        $ProgressBar.Value = 0
-        $ProgressBar.Refresh()
-
         UpdateModsList $GamesListBox $ModParentsListBox $ModsListBox
     } else {
         Show-CustomMessageBox -Text "Please select at least one mod to uninstall." -Title "Information" -Buttons "OK"
@@ -1206,64 +1203,45 @@ function InstallModFromGUI {
     $selectedGame = $GamesListBox.SelectedItem
     $selectedModParent = $ModParentsListBox.SelectedItem
 
-    if (-not $selectedGame -or -not $selectedModParent) {
-        Show-CustomMessageBox -Text "Please select a game and mod parent directory." -Title "Information" -Buttons "OK"
-        return
-    }
+    if ($selectedGame -and $selectedModParent) {
+        $gamePath = Join-Path -Path $GamesPath -ChildPath $selectedGame
+        $modParentPath = Join-Path -Path $gamePath -ChildPath $selectedModParent
+        $modSourcePath = Join-Path -Path $modParentPath -ChildPath $ModName
+        $backupDirectory = Join-Path -Path $modParentPath -ChildPath "Backup"
 
-    $gamePath = Join-Path -Path $GamesPath -ChildPath $selectedGame
-    $modParentPath = Join-Path -Path $gamePath -ChildPath $selectedModParent
-    $modPath = Join-Path -Path $modParentPath -ChildPath $ModName
-
-    if (-not (Test-Path -LiteralPath $modPath)) {
-        Show-CustomMessageBox -Text "Mod path does not exist: $modPath" -Title "Error" -Buttons "OK"
-        return
-    }
-
-    # Determine game directory
-    if ($selectedModParent -eq "Core Mods") {
-        $gameDirectory = $Config['CoreGameDirectory']
-    } elseif ($selectedModParent -eq "Saved Games Mods") {
-        $gameDirectory = $Config['SavedGamesDirectory']
-    } else {
-        Show-CustomMessageBox -Text "Invalid mod parent directory." -Title "Error" -Buttons "OK"
-        return
-    }
-
-    $backupDirectory = Join-Path -Path $gamePath -ChildPath "Backup"
-    $modInstalled = Is-Mod-Installed -ModPath $modPath -GameDirectory $gameDirectory
-
-    if ($modInstalled) {
-        Show-CustomMessageBox -Text "Mod '$ModName' is already installed." -Title "Information" -Buttons "OK"
-        return
-    }
-
-    # Check for conflicts with installed mods
-    $installedMods = @(Get-Installed-Mods -GameDirectory $gameDirectory -ModParentPath $modParentPath)
-
-    $conflictingMods = Find-Mod-Conflicts-With-Installed -ModToInstall $modPath -InstalledMods $installedMods -ModParentPath $modParentPath
-
-    if ($conflictingMods.Count -gt 0) {
-        $conflictMessage = "The mod '$ModName' conflicts with the following installed mods:`n"
-        $conflictMessage += ($conflictingMods -join "`n")
-        $conflictMessage += "`nDo you want to uninstall them and proceed?"
-
-        $result = Show-CustomMessageBox -Text $conflictMessage -Title "Conflict Detected" -Buttons "YesNo"
-        if ($result -ne [System.Windows.Forms.DialogResult]::Yes) {
+        # Determine game directory
+        if ($selectedModParent -eq "Core Mods") {
+            $gameDirectory = $Config['CoreGameDirectory']
+        } elseif ($selectedModParent -eq "Saved Games Mods") {
+            $gameDirectory = $Config['SavedGamesDirectory']
+        } else {
+            Show-CustomMessageBox -Text "Invalid mod parent directory." -Title "Error" -Buttons "OK"
             return
         }
 
-        # Uninstall conflicting mods
-        foreach ($conflict in $conflictingMods) {
-            $conflictingModPath = Join-Path -Path $modParentPath -ChildPath $conflict
-            Uninstall-Mod -ModName $conflict -ModSourcePath $conflictingModPath -GameDirectory $gameDirectory -BackupDirectory $backupDirectory -ProgressBar $ProgressBar
-        }
-    }
+        # Check for conflicts with already installed mods
+        $installedMods = Get-Installed-Mods -GameDirectory $gameDirectory -ModParentPath $modParentPath
+        $conflicts = Find-Mod-Conflicts-With-Installed -ModToInstall $modSourcePath -InstalledMods $installedMods -ModParentPath $modParentPath
 
-    # Install the mod
-    $StatusLabel.Text = "Installing mod: $ModName"
-    Install-Mod -ModName $ModName -ModSourcePath $modPath -GameDirectory $gameDirectory -BackupDirectory $backupDirectory -ProgressBar $ProgressBar
-    $StatusLabel.Text = "Installed mod: $ModName"
+        if ($conflicts.Count -gt 0) {
+            $conflictList = $conflicts -join ", "
+            $message = "The mod '$ModName' has file conflicts with the following installed mod(s):`n`n$conflictList`n`nDo you want to proceed with the installation?"
+            $result = Show-CustomMessageBox -Text $message -Title "Mod Conflict Detected" -Buttons "YesNo"
+            if ($result -ne [System.Windows.Forms.DialogResult]::Yes) {
+                $StatusLabel.Text = "Installation of '$ModName' canceled."
+                return
+            }
+        }
+
+        $StatusLabel.Text = "Installing mod: $ModName..."
+        [System.Windows.Forms.Application]::DoEvents()
+
+        Install-Mod -ModName $ModName -ModSourcePath $modSourcePath -GameDirectory $gameDirectory -BackupDirectory $backupDirectory -ProgressBar $ProgressBar
+
+        $StatusLabel.Text = "Mod '$ModName' installed successfully."
+    } else {
+        Show-CustomMessageBox -Text "Please select a game and mod parent directory." -Title "Error" -Buttons "OK"
+    }
 }
 
 function UninstallModFromGUI {
@@ -1272,48 +1250,56 @@ function UninstallModFromGUI {
         [System.Windows.Forms.ListBox]$GamesListBox,
         [System.Windows.Forms.ListBox]$ModParentsListBox,
         [System.Windows.Forms.ProgressBar]$ProgressBar,
-        [System.Windows.Forms.Label]$StatusLabel,
-        [ref]$FilesProcessed
+        [System.Windows.Forms.Label]$StatusLabel
     )
 
     $selectedGame = $GamesListBox.SelectedItem
     $selectedModParent = $ModParentsListBox.SelectedItem
 
-    if (-not $selectedGame -or -not $selectedModParent) {
-        Show-CustomMessageBox -Text "Please select a game and mod parent directory." -Title "Information" -Buttons "OK"
-        return
-    }
+    if ($selectedGame -and $selectedModParent) {
+        $gamePath = Join-Path -Path $GamesPath -ChildPath $selectedGame
+        $modParentPath = Join-Path -Path $gamePath -ChildPath $selectedModParent
+        $modSourcePath = Join-Path -Path $modParentPath -ChildPath $ModName
+        $backupDirectory = Join-Path -Path $modParentPath -ChildPath "Backup"
 
-    $gamePath = Join-Path -Path $GamesPath -ChildPath $selectedGame
-    $modParentPath = Join-Path -Path $gamePath -ChildPath $selectedModParent
-    $modPath = Join-Path -Path $modParentPath -ChildPath $ModName
+        # Determine game directory
+        if ($selectedModParent -eq "Core Mods") {
+            $gameDirectory = $Config['CoreGameDirectory']
+        } elseif ($selectedModParent -eq "Saved Games Mods") {
+            $gameDirectory = $Config['SavedGamesDirectory']
+        } else {
+            Show-CustomMessageBox -Text "Invalid mod parent directory." -Title "Error" -Buttons "OK"
+            return
+        }
 
-    if (-not (Test-Path -LiteralPath $modPath)) {
-        return  # Silently skip if mod path doesn't exist
-    }
+        $StatusLabel.Text = "Uninstalling mod: $ModName..."
+        [System.Windows.Forms.Application]::DoEvents()
 
-    # Determine game directory
-    if ($selectedModParent -eq "Core Mods") {
-        $gameDirectory = $Config['CoreGameDirectory']
-    } elseif ($selectedModParent -eq "Saved Games Mods") {
-        $gameDirectory = $Config['SavedGamesDirectory']
+        # Count files for progress bar
+        $backupDir = Join-Path -Path $backupDirectory -ChildPath ("Backup-" + $ModName)
+        $totalFiles = 0
+        if (Test-Path -LiteralPath $backupDir) {
+            $files = Get-ChildItem -LiteralPath $backupDir -Recurse -File
+            $totalFiles = $files.Count
+        }
+
+        if ($totalFiles -eq 0) {
+            $totalFiles = 1
+        }
+
+        $ProgressBar.Minimum = 0
+        $ProgressBar.Maximum = $totalFiles
+        $ProgressBar.Value = 0
+
+        $filesProcessed = 0
+
+        Uninstall-Mod -ModName $ModName -ModSourcePath $modSourcePath -GameDirectory $gameDirectory -BackupDirectory $backupDirectory -ProgressBar $ProgressBar -FilesProcessed ([ref]$filesProcessed)
+
+        $ProgressBar.Value = 0
+        $StatusLabel.Text = "Mod '$ModName' uninstalled successfully."
     } else {
-        Show-CustomMessageBox -Text "Invalid mod parent directory." -Title "Error" -Buttons "OK"
-        return
+        Show-CustomMessageBox -Text "Please select a game and mod parent directory." -Title "Error" -Buttons "OK"
     }
-
-    $backupDirectory = Join-Path -Path $gamePath -ChildPath "Backup"
-    $modInstalled = Is-Mod-Installed -ModPath $modPath -GameDirectory $gameDirectory
-
-    # Silently skip if the mod is not installed
-    if (-not $modInstalled) {
-        return  # Just return, silently skipping the mod
-    }
-
-    # Uninstall the mod and update the progress bar
-    $StatusLabel.Text = "Uninstalling mod: $ModName"
-    Uninstall-Mod -ModName $ModName -ModSourcePath $modPath -GameDirectory $gameDirectory -BackupDirectory $backupDirectory -ProgressBar $ProgressBar -FilesProcessed $FilesProcessed
-    $StatusLabel.Text = "Uninstalled mod: $ModName"
 }
 
 # Start the GUI
