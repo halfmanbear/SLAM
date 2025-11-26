@@ -7,8 +7,10 @@ OutputBaseFilename=SLAM_Installer
 Compression=lzma
 SolidCompression=yes
 PrivilegesRequired=admin
-Uninstallable=no
+Uninstallable=yes
 DisableDirPage=no
+UninstallDisplayName=SLAM - SymLink Advanced Modding
+UninstallDisplayIcon={app}\icon.ico
 
 [Files]
 ; No static files—content fetched at install time
@@ -24,12 +26,18 @@ const
   WingetExe = 'winget';
   TempDir = '{tmp}\SLAMTempClone';
 
-procedure ExecWithWait(const FilePath, Params: String);
+function ExecWithWait(const FilePath, Params, ErrorMsg: String): Boolean;
 var
   ResultCode: Integer;
 begin
-  if not Exec(FilePath, Params, '', SW_SHOW, ewWaitUntilTerminated, ResultCode) or (ResultCode <> 0) then
-    MsgBox(Format('Command failed: %s %s (Exit code: %d)', [FilePath, Params, ResultCode]), mbError, MB_OK);
+  Result := Exec(FilePath, Params, '', SW_SHOW, ewWaitUntilTerminated, ResultCode);
+  if not Result or (ResultCode <> 0) then
+  begin
+    MsgBox(Format('%s'#13#10'Command: %s %s'#13#10'Exit code: %d', [ErrorMsg, FilePath, Params, ResultCode]), mbError, MB_OK);
+    Result := False;
+  end
+  else
+    Result := True;
 end;
 
 function IsInstalled(const Path: String): Boolean;
@@ -44,48 +52,88 @@ begin
   Result := Exec('cmd.exe', '/c ' + WingetExe + ' --version', '', SW_HIDE, ewWaitUntilTerminated, Res) and (Res = 0);
 end;
 
-procedure InstallIfMissing(const Id, ExePath, FriendlyName: String);
+function InstallIfMissing(const Id, ExePath, FriendlyName: String): Boolean;
 begin
+  Result := True;
   if not IsInstalled(ExePath) then
   begin
     if CheckWingetInstalled() then
-      ExecWithWait('cmd.exe', '/c ' + WingetExe + ' install --id ' + Id + ' -e --source winget')
+    begin
+      if not ExecWithWait('cmd.exe', '/c ' + WingetExe + ' install --id ' + Id + ' -e --source winget',
+                          'Failed to install ' + FriendlyName) then
+      begin
+        MsgBox(FriendlyName + ' installation failed. Please install it manually and try again.', mbError, MB_OK);
+        Result := False;
+      end;
+    end
     else
+    begin
       MsgBox(FriendlyName + ' is missing and winget is unavailable. Please install it manually.', mbError, MB_OK);
+      Result := False;
+    end;
   end;
 end;
 
-procedure CloneAndCopySLAM();
+function CloneAndCopySLAM(): Boolean;
 var
   InstallPath, ClonePath: String;
 begin
+  Result := False;
   InstallPath := ExpandConstant('{app}');
   ClonePath   := ExpandConstant(TempDir);
 
   // Ensure Git and PowerShell 7 are present
-  InstallIfMissing('Git.Git', GitExe, 'Git');
-  InstallIfMissing('Microsoft.PowerShell', PS7Path, 'PowerShell 7');
+  if not InstallIfMissing('Git.Git', GitExe, 'Git') then
+    Exit;
+
+  if not InstallIfMissing('Microsoft.PowerShell', PS7Path, 'PowerShell 7') then
+    Exit;
 
   // Clean up any previous clone
   if DirExists(ClonePath) then
-    ExecWithWait('cmd.exe', '/c rmdir /S /Q "' + ClonePath + '"');
-  CreateDir(ClonePath);
+    ExecWithWait('cmd.exe', '/c rmdir /S /Q "' + ClonePath + '"', 'Failed to clean previous clone directory');
+
+  if not ForceDirectories(ClonePath) then
+  begin
+    MsgBox('Failed to create temporary directory: ' + ClonePath, mbError, MB_OK);
+    Exit;
+  end;
 
   // Clone repository
-  ExecWithWait(GitExe, 'clone https://github.com/halfmanbear/SLAM.git "' + ClonePath + '"');
+  if not ExecWithWait(GitExe, 'clone https://github.com/halfmanbear/SLAM.git "' + ClonePath + '"',
+                      'Failed to clone SLAM repository. Please check your internet connection.') then
+    Exit;
+
+  // Verify clone was successful
+  if not FileExists(ClonePath + '\main.ps1') then
+  begin
+    MsgBox('Repository cloned but main.ps1 not found. Installation cannot continue.', mbError, MB_OK);
+    Exit;
+  end;
 
   // Copy everything—including hidden files—into {app}
-  ExecWithWait('cmd.exe', '/c xcopy "' + ClonePath + '\*" "' + InstallPath + '" /E /H /C /I /Y');
+  if not ExecWithWait('cmd.exe', '/c xcopy "' + ClonePath + '\*" "' + InstallPath + '" /E /H /C /I /Y',
+                      'Failed to copy files to installation directory') then
+    Exit;
 
   // Run shortcut creation script
-  ExecWithWait(PS7Path, '-ExecutionPolicy Bypass -File "' + InstallPath + '\create-shortcut.ps1"');
+  ExecWithWait(PS7Path, '-ExecutionPolicy Bypass -File "' + InstallPath + '\create-shortcut.ps1"',
+               'Failed to create desktop shortcut (you can create it manually later)');
 
-  // Optional: clean up temp clone
-  ExecWithWait('cmd.exe', '/c rmdir /S /Q "' + ClonePath + '"');
+  // Clean up temp clone
+  ExecWithWait('cmd.exe', '/c rmdir /S /Q "' + ClonePath + '"', 'Failed to clean up temporary files');
+
+  Result := True;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssInstall then
-    CloneAndCopySLAM();
+  begin
+    if not CloneAndCopySLAM() then
+    begin
+      MsgBox('SLAM installation failed. Please check the error messages above and try again.', mbError, MB_OK);
+      WizardForm.Close;
+    end;
+  end;
 end;
