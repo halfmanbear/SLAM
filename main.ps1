@@ -1242,7 +1242,7 @@ function InstallModFromGUI {
         $gamePath = Join-Path -Path $GamesPath -ChildPath $selectedGame
         $modParentPath = Join-Path -Path $gamePath -ChildPath $selectedModParent
         $modSourcePath = Join-Path -Path $modParentPath -ChildPath $ModName
-        $backupDirectory = Join-Path -Path $modParentPath -ChildPath "Backup"
+        $backupDirectory = Join-Path -Path $gamePath -ChildPath "Backup"
 
         # Determine game directory
         if ($selectedModParent -eq "Core Mods") {
@@ -1295,7 +1295,7 @@ function UninstallModFromGUI {
         $gamePath = Join-Path -Path $GamesPath -ChildPath $selectedGame
         $modParentPath = Join-Path -Path $gamePath -ChildPath $selectedModParent
         $modSourcePath = Join-Path -Path $modParentPath -ChildPath $ModName
-        $backupDirectory = Join-Path -Path $modParentPath -ChildPath "Backup"
+        $backupDirectory = Join-Path -Path $gamePath -ChildPath "Backup"
 
         # Determine game directory
         if ($selectedModParent -eq "Core Mods") {
