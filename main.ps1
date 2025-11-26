@@ -324,23 +324,17 @@ function Install-Mod {
                 New-Item -ItemType Directory -Path $backupDirPath -Force | Out-Null
             }
 
-            # Check if it's a symlink first before trying to remove it
+            # Remove symbolic link if it exists (does nothing if regular file)
             try {
-                $item = Get-Item -LiteralPath $targetFilePath -Force -ErrorAction Stop
-                if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
-                    Remove-SymbolicLink -Path $targetFilePath
-                } else {
-                    # It's a regular file, move it to backup
-                    Move-File-With-Metadata -SourcePath $targetFilePath -DestinationPath $backupFilePath
-                }
+                Remove-SymbolicLink -Path $targetFilePath
             } catch {
-                # If we can't determine file type, try to move it
-                if (Test-Path -LiteralPath $targetFilePath) {
-                    Move-File-With-Metadata -SourcePath $targetFilePath -DestinationPath $backupFilePath
-                }
+                # Ignore errors from symlink removal
             }
-        } else {
-            # Target doesn't exist, no backup needed
+
+            # Move file to backup if it still exists (regular files will still be there)
+            if (Test-Path -LiteralPath $targetFilePath) {
+                Move-File-With-Metadata -SourcePath $targetFilePath -DestinationPath $backupFilePath
+            }
         }
 
         # Ensure target directory exists
