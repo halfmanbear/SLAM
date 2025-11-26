@@ -102,19 +102,12 @@ function Remove-SymbolicLink {
     param (
         [Parameter(Mandatory = $true)][string]$Path
     )
-    # Use Get-Item with -Force to handle broken symlinks (Test-Path returns false for broken symlinks)
-    try {
-        $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
-        if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
-            $result = [WinAPI]::DeleteFile($Path)
-            if (-not $result) {
-                $errorMessage = [System.ComponentModel.Win32Exception]::new([System.Runtime.InteropServices.Marshal]::GetLastWin32Error()).Message
-                throw "Failed to remove symbolic link: $errorMessage"
-            }
+    if ((Test-Path -LiteralPath $Path) -and ((Get-Item -LiteralPath $Path).Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+        $result = [WinAPI]::DeleteFile($Path)
+        if (-not $result) {
+            $errorMessage = [System.ComponentModel.Win32Exception]::new([System.Runtime.InteropServices.Marshal]::GetLastWin32Error()).Message
+            throw "Failed to remove symbolic link: $errorMessage"
         }
-    } catch [System.Management.Automation.ItemNotFoundException] {
-        # Path doesn't exist, nothing to remove
-        return
     }
 }
 
@@ -324,17 +317,11 @@ function Install-Mod {
                 New-Item -ItemType Directory -Path $backupDirPath -Force | Out-Null
             }
 
-            # Remove symbolic link if it exists (does nothing if regular file)
-            try {
-                Remove-SymbolicLink -Path $targetFilePath
-            } catch {
-                # Ignore errors from symlink removal
-            }
+            # Remove symbolic link if it exists
+            Remove-SymbolicLink -Path $targetFilePath
 
-            # Move file to backup if it still exists (regular files will still be there)
-            if (Test-Path -LiteralPath $targetFilePath) {
-                Move-File-With-Metadata -SourcePath $targetFilePath -DestinationPath $backupFilePath
-            }
+            # Move file to backup
+            Move-File-With-Metadata -SourcePath $targetFilePath -DestinationPath $backupFilePath
         }
 
         # Ensure target directory exists
