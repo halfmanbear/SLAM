@@ -83,6 +83,7 @@ if (-not ([System.Management.Automation.PSTypeName]'ModItem').Type) {
 "@
 }
 
+
 # Helper Functions
 function New-SymbolicLink {
     [CmdletBinding()]
@@ -90,7 +91,8 @@ function New-SymbolicLink {
         [Parameter(Mandatory = $true)][string]$Path,
         [Parameter(Mandatory = $true)][string]$Target
     )
-    New-Item -Path $Path -ItemType SymbolicLink -Value $Target -Force | Out-Null
+    $escapedPath = [WildcardPattern]::Escape($Path)
+    New-Item -Path $escapedPath -ItemType SymbolicLink -Value $Target -Force | Out-Null
 }
 
 function Remove-SymbolicLink {
@@ -130,7 +132,16 @@ function Remove-EmptyModDirectories {
         [Parameter(Mandatory=$true)] [string] $TargetRootPath
     )
 
-    # Normalize paths
+    # Normalize paths with error handling
+    if (-not (Test-Path -LiteralPath $ModSourcePath)) {
+        Write-Warning "Mod source path not found: $ModSourcePath"
+        return
+    }
+    if (-not (Test-Path -LiteralPath $TargetRootPath)) {
+        Write-Warning "Target root path not found: $TargetRootPath"
+        return
+    }
+
     $ModSourcePath  = (Resolve-Path -LiteralPath $ModSourcePath).Path.TrimEnd('\','/')
     $TargetRootPath = (Resolve-Path -LiteralPath $TargetRootPath).Path.TrimEnd('\','/')
 
@@ -215,13 +226,15 @@ function Is-Mod-Installed {
 
     $sampleFile = Get-ChildItem -LiteralPath $ModPath -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($sampleFile) {
-        $relativePath = $sampleFile.FullName.Substring($ModPath.Length).TrimStart("\")
+        $relativePath = $sampleFile.FullName.Substring($ModPath.Length).TrimStart('\', '/')
         $linkPath = Join-Path -Path $GameDirectory -ChildPath $relativePath
         if (Test-Path -LiteralPath $linkPath) {
-            $linkItem = Get-Item -LiteralPath $linkPath
+            $linkItem = Get-Item -LiteralPath $linkPath -Force
             if ($linkItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
                 $targetPath = (Get-Item $linkItem.FullName -Force).Target
-                return $targetPath.StartsWith($ModPath)
+                if ($targetPath) {
+                    return $targetPath.StartsWith($ModPath)
+                }
             }
         }
     }
@@ -248,7 +261,7 @@ function Remove-Links-Directly {
 
         foreach ($symlinkPath in $symlinkPaths) {
             try {
-                $relativePath = $symlinkPath.Substring($GameDirectory.Length).TrimStart("\")
+                $relativePath = $symlinkPath.Substring($GameDirectory.Length).TrimStart('\', '/')
                 $sourceFilePath = Join-Path -Path $ModSourcePath -ChildPath $relativePath
 
                 if (Test-Path -LiteralPath $sourceFilePath) {
@@ -291,7 +304,7 @@ function Install-Mod {
             $ProgressBar.Refresh()
         }
 
-        $relativePath = $file.FullName.Substring($ModSourcePath.Length).TrimStart("\")
+        $relativePath = $file.FullName.Substring($ModSourcePath.Length).TrimStart('\', '/')
         $targetFilePath = Join-Path -Path $GameDirectory -ChildPath $relativePath
         $backupFilePath = Join-Path -Path $backupDir -ChildPath $relativePath
 
@@ -344,7 +357,7 @@ function Uninstall-Mod {
         $totalFiles = $files.Count
 
         foreach ($file in $files) {
-            $relativePath   = $file.FullName.Substring($backupDir.Length).TrimStart("\")
+            $relativePath   = $file.FullName.Substring($backupDir.Length).TrimStart('\', '/')
             $targetFilePath = Join-Path -Path $GameDirectory -ChildPath $relativePath
 
             # If a symlink is still there, remove it first
@@ -396,7 +409,7 @@ function Find-Mod-Conflicts {
         $files = Get-ChildItem -LiteralPath $mod.FullName -Recurse -File
 
         foreach ($file in $files) {
-            $relativePath = $file.FullName.Substring($mod.FullName.Length).TrimStart("\").ToLower()
+            $relativePath = $file.FullName.Substring($mod.FullName.Length).TrimStart('\', '/').ToLower()
 
             if ($fileMappings.ContainsKey($relativePath)) {
                 $existingModName = $fileMappings[$relativePath]
@@ -469,7 +482,7 @@ function Find-Mod-Conflicts-With-Installed {
 
     $modToInstallName = Split-Path -Path $ModToInstall -Leaf
     $modToInstallFiles = Get-ChildItem -LiteralPath $ModToInstall -Recurse -File | ForEach-Object {
-        $_.FullName.Substring($ModToInstall.Length).TrimStart("\").ToLower()
+        $_.FullName.Substring($ModToInstall.Length).TrimStart('\', '/').ToLower()
     }
 
     $conflictingMods = @()
@@ -482,7 +495,7 @@ function Find-Mod-Conflicts-With-Installed {
         $installedModPath = Join-Path -Path $ModParentPath -ChildPath $installedModName
 
         $installedModFiles = Get-ChildItem -LiteralPath $installedModPath -Recurse -File | ForEach-Object {
-            $_.FullName.Substring($installedModPath.Length).TrimStart("\").ToLower()
+            $_.FullName.Substring($installedModPath.Length).TrimStart('\', '/').ToLower()
         }
 
         $conflicts = $modToInstallFiles | Where-Object { $installedModFiles -contains $_ }
@@ -613,7 +626,7 @@ function Initialize-GUI {
     $form.ForeColor = [System.Drawing.Color]::White
 
     $form.Add_FormClosed({
-        Stop-Process -Id $PID -Force
+        [System.Windows.Forms.Application]::Exit()
     })
 
     # Define fonts
@@ -815,12 +828,12 @@ function Initialize-GUI {
 
     # Event handlers
     $listboxGames.Add_SelectedIndexChanged({
-        UpdateModsList $listboxGames $listboxModParents $listboxMods
+        UpdateModsList $listboxGames $listboxModParents $listboxMods $checkboxSortByInstalled
         Adjust-ListBoxHeight $listboxMods $maxModsListHeight
     })
 
     $listboxModParents.Add_SelectedIndexChanged({
-        UpdateModsList $listboxGames $listboxModParents $listboxMods
+        UpdateModsList $listboxGames $listboxModParents $listboxMods $checkboxSortByInstalled
         Adjust-ListBoxHeight $listboxMods $maxModsListHeight
     })
 
@@ -847,7 +860,7 @@ function Initialize-GUI {
 
     # Event handler for Sort by Installed Status checkbox
     $checkboxSortByInstalled.Add_CheckedChanged({
-        UpdateModsList $listboxGames $listboxModParents $listboxMods
+        UpdateModsList $listboxGames $listboxModParents $listboxMods $checkboxSortByInstalled
         Adjust-ListBoxHeight $listboxMods $maxModsListHeight
     })
 
@@ -900,11 +913,22 @@ function Initialize-GUI {
         $labelStatus.Text = "Checking for updates…"
         [System.Windows.Forms.Application]::DoEvents()
 
-        # 2. Make Git trust this folder
+        # 2. Make Git trust this folder (required for security)
+        # Note: This must be global as safe.directory is a security feature
         git -C $PSScriptRoot config --global --add safe.directory "$PSScriptRoot" 2>$null | Out-Null
 
-        # 3. Stash only config.txt so user edits are preserved
-        git -C $PSScriptRoot stash push --include-untracked -- config.txt 2>$null | Out-Null
+        # 3. Backup config.txt manually since it's .gitignored
+        $configPath = Join-Path -Path $PSScriptRoot -ChildPath 'config.txt'
+        $configBackupPath = Join-Path -Path $PSScriptRoot -ChildPath 'config.txt.backup'
+        $configBackedUp = $false
+        if (Test-Path -LiteralPath $configPath) {
+            try {
+                Copy-Item -LiteralPath $configPath -Destination $configBackupPath -Force -ErrorAction Stop
+                $configBackedUp = $true
+            } catch {
+                Write-Warning "Could not backup config.txt: $_"
+            }
+        }
 
         # 4. Fetch latest from origin/main
         git -C $PSScriptRoot fetch origin main 2>&1 | Out-Null
@@ -917,8 +941,10 @@ function Initialize-GUI {
             # Nothing to do
             $labelStatus.Text = "Already up to date."
             [System.Windows.Forms.Application]::DoEvents()
-            # Restore config.txt if we stashed it
-            git -C $PSScriptRoot stash pop 2>$null | Out-Null
+            # Clean up backup
+            if ($configBackedUp -and (Test-Path -LiteralPath $configBackupPath)) {
+                Remove-Item -LiteralPath $configBackupPath -Force -ErrorAction SilentlyContinue
+            }
             return
         }
 
@@ -942,25 +968,31 @@ function Initialize-GUI {
             # User chose not to update
             $labelStatus.Text = "Update canceled."
             [System.Windows.Forms.Application]::DoEvents()
-            git -C $PSScriptRoot stash pop 2>$null | Out-Null
+            # Clean up backup
+            if ($configBackedUp -and (Test-Path -LiteralPath $configBackupPath)) {
+                Remove-Item -LiteralPath $configBackupPath -Force -ErrorAction SilentlyContinue
+            }
             return
         }
 
-        # 7. Discard all other local changes and clean untracked files
+        # 7. Reset to origin/main (this replaces both reset and pull)
         git -C $PSScriptRoot reset --hard origin/main 2>&1 | Out-Null
         git -C $PSScriptRoot clean -fd               2>&1 | Out-Null
 
-        # 8. Pull down the latest commits
-        git -C $PSScriptRoot pull origin main         2>&1 | Out-Null
+        # 8. Restore the user's config.txt from backup
+        if ($configBackedUp -and (Test-Path -LiteralPath $configBackupPath)) {
+            try {
+                Move-Item -LiteralPath $configBackupPath -Destination $configPath -Force -ErrorAction Stop
+            } catch {
+                Write-Warning "Could not restore config.txt: $_"
+            }
+        }
 
-        # 9. Restore the user's config.txt
-        git -C $PSScriptRoot stash pop                2>&1 | Out-Null
-
-        # 10. Notify and exit so user can relaunch updated SLAM
-        $labelStatus.Text = "Update applied. Restarting…"
+        # 9. Notify and exit so user can relaunch updated SLAM
+        $labelStatus.Text = "Update applied. Please restart SLAM."
         [System.Windows.Forms.Application]::DoEvents()
-        Start-Sleep -Milliseconds 200
-        Stop-Process -Id $PID -Force
+        Start-Sleep -Milliseconds 1000
+        $form.Close()
     })
 
     # DrawItem event handler for mods
@@ -1098,7 +1130,8 @@ function UpdateModsList {
     param (
         [System.Windows.Forms.ListBox]$GamesListBox,
         [System.Windows.Forms.ListBox]$ModParentsListBox,
-        [System.Windows.Forms.ListBox]$ModsListBox
+        [System.Windows.Forms.ListBox]$ModsListBox,
+        [System.Windows.Forms.CheckBox]$SortByInstalledCheckBox = $null
     )
     $ModsListBox.Items.Clear()
     $selectedGame = $GamesListBox.SelectedItem
@@ -1133,7 +1166,7 @@ function UpdateModsList {
             }
 
             # Check if sorting by installed status is enabled
-            if ($checkboxSortByInstalled.Checked) {
+            if ($SortByInstalledCheckBox -and $SortByInstalledCheckBox.Checked) {
                 # Sort by installed status, installed mods come first
                 $modItems = $modItems | Sort-Object -Property { -not $_.IsInstalled }, Name
             } else {
@@ -1207,7 +1240,7 @@ function InstallModFromGUI {
         $gamePath = Join-Path -Path $GamesPath -ChildPath $selectedGame
         $modParentPath = Join-Path -Path $gamePath -ChildPath $selectedModParent
         $modSourcePath = Join-Path -Path $modParentPath -ChildPath $ModName
-        $backupDirectory = Join-Path -Path $modParentPath -ChildPath "Backup"
+        $backupDirectory = Join-Path -Path $gamePath -ChildPath "Backup"
 
         # Determine game directory
         if ($selectedModParent -eq "Core Mods") {
@@ -1260,7 +1293,7 @@ function UninstallModFromGUI {
         $gamePath = Join-Path -Path $GamesPath -ChildPath $selectedGame
         $modParentPath = Join-Path -Path $gamePath -ChildPath $selectedModParent
         $modSourcePath = Join-Path -Path $modParentPath -ChildPath $ModName
-        $backupDirectory = Join-Path -Path $modParentPath -ChildPath "Backup"
+        $backupDirectory = Join-Path -Path $gamePath -ChildPath "Backup"
 
         # Determine game directory
         if ($selectedModParent -eq "Core Mods") {

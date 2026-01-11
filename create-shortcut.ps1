@@ -30,20 +30,48 @@ try {
     $desktopPath = [System.IO.Path]::Combine([System.Environment]::GetFolderPath('Desktop'), "SLAM.lnk")
     Write-Host "Shortcut path: $desktopPath"
 
+    # Find PowerShell 7 installation (check common locations)
+    $pwshPath = $null
+    $pwshPaths = @(
+        "C:\Program Files\PowerShell\7\pwsh.exe",
+        "C:\Program Files\PowerShell\7-preview\pwsh.exe",
+        "$env:LOCALAPPDATA\Microsoft\PowerShell\7\pwsh.exe"
+    )
+
+    foreach ($path in $pwshPaths) {
+        if (Test-Path $path) {
+            $pwshPath = $path
+            Write-Host "Found PowerShell 7 at: $pwshPath"
+            break
+        }
+    }
+
+    if (-not $pwshPath) {
+        # Try to find pwsh.exe in PATH
+        $pwshInPath = Get-Command pwsh.exe -ErrorAction SilentlyContinue
+        if ($pwshInPath) {
+            $pwshPath = $pwshInPath.Source
+            Write-Host "Found PowerShell 7 in PATH: $pwshPath"
+        } else {
+            throw "PowerShell 7 (pwsh.exe) not found. Please install PowerShell 7."
+        }
+    }
+
     # Create the shortcut
     $WshShell = New-Object -ComObject WScript.Shell
     $Shortcut = $WshShell.CreateShortcut($desktopPath)
 
-    # Set the shortcut properties to point to pwsh.exe (PowerShell 7)
-    $pwshPath = "C:\Program Files\PowerShell\7\pwsh.exe"
+    # Set the shortcut properties - simplified to run with admin rights
     $Shortcut.TargetPath = $pwshPath
-    $Shortcut.Arguments = "-ExecutionPolicy Bypass -NoExit -Command `"Start-Process pwsh -ArgumentList '-ExecutionPolicy Bypass -NoExit -File `"`"$mainScript`"`"' -Verb RunAs; exit`""
+    $Shortcut.Arguments = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$mainScript`""
     $Shortcut.WorkingDirectory = $scriptDir
     $Shortcut.IconLocation = $iconPath
 
     # Save the shortcut
     $Shortcut.Save()
+
     Write-Host "Shortcut created on your desktop successfully!"
+    Write-Host "Note: You may need to run the shortcut as Administrator for symlink creation to work."
 } catch {
     Write-Host "An error occurred: $_"
 }
