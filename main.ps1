@@ -83,6 +83,7 @@ if (-not ([System.Management.Automation.PSTypeName]'ModItem').Type) {
 "@
 }
 
+
 # Helper Functions
 function New-SymbolicLink {
     [CmdletBinding()]
@@ -90,11 +91,8 @@ function New-SymbolicLink {
         [Parameter(Mandatory = $true)][string]$Path,
         [Parameter(Mandatory = $true)][string]$Target
     )
-    try {
-        New-Item -Path $Path -ItemType SymbolicLink -Value $Target -Force -ErrorAction Stop | Out-Null
-    } catch {
-        throw "Failed to create symbolic link from '$Path' to '$Target': $_"
-    }
+    $escapedPath = [WildcardPattern]::Escape($Path)
+    New-Item -Path $escapedPath -ItemType SymbolicLink -Value $Target -Force | Out-Null
 }
 
 function Remove-SymbolicLink {
