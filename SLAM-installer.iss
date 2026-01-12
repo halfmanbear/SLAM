@@ -92,8 +92,8 @@ var
   WarningMsg: String;
 begin
   WarningMsg := 'WARNING: Before proceeding, ensure that:' + #13#10 + #13#10 +
-    '- All activated mods are DISABLED in-game' + #13#10 +
-    '- Any custom mods are BACKED UP externally' + #13#10 + #13#10 +
+    '- No mods are currently Installed within SLAM' + #13#10 +
+    '- All mods are BACKED UP' + #13#10 + #13#10 +
     'This will DELETE the SLAM directory contents. ' +
     'Mods that have not been backed up will be permanently lost.' + #13#10 + #13#10 +
     'Do you want to continue?';
