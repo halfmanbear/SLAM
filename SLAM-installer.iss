@@ -1,6 +1,10 @@
 [Setup]
 AppName=SLAM
-AppVersion=1.0
+AppVersion=
+AppVerName=SLAM
+AppPublisher=HalfManBear
+UninstallDisplayName=SLAM
+UninstallDisplayIcon={app}\icon.ico
 DefaultDirName={commonpf}\SLAM
 DefaultGroupName=SLAM
 OutputBaseFilename=SLAM_Installer
@@ -104,6 +108,7 @@ end;
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   ShortcutPath: String;
+  AppPath: String;
 begin
   if CurUninstallStep = usUninstall then
   begin
@@ -122,5 +127,12 @@ begin
     ShortcutPath := ExpandConstant('{commonprograms}\SLAM.lnk');
     if FileExists(ShortcutPath) then
       DeleteFile(ShortcutPath);
+  end;
+  
+  if CurUninstallStep = usPostUninstall then
+  begin
+    AppPath := ExpandConstant('{app}');
+    if DirExists(AppPath) then
+      RemoveDir(AppPath);
   end;
 end;
