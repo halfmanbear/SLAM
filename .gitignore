@@ -3,3 +3,7 @@ config.txt
 
 # Ignore all content in the Games directory
 /Games/*
+
+# Ignore to protect uninstall files
+unins000.dat
+unins000.exe
