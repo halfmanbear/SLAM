@@ -95,6 +95,20 @@ function New-SymbolicLink {
     New-Item -Path $escapedPath -ItemType SymbolicLink -Value $Target -Force | Out-Null
 }
 
+function New-DirectorySymlink {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Target
+    )
+    
+    # Use cmd mklink /D - most reliable for directory symlinks
+    $output = cmd /c "mklink /D `"$Path`" `"$Target`"" 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to create directory symlink: $output"
+    }
+}
+
 function Remove-SymbolicLink {
     [CmdletBinding()]
     param (
@@ -224,20 +238,54 @@ function Is-Mod-Installed {
         [Parameter(Mandatory = $true)][string]$GameDirectory
     )
 
+    # Get a sample file from the mod
     $sampleFile = Get-ChildItem -LiteralPath $ModPath -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($sampleFile) {
-        $relativePath = $sampleFile.FullName.Substring($ModPath.Length).TrimStart('\', '/')
-        $linkPath = Join-Path -Path $GameDirectory -ChildPath $relativePath
-        if (Test-Path -LiteralPath $linkPath) {
-            $linkItem = Get-Item -LiteralPath $linkPath -Force
-            if ($linkItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
-                $targetPath = (Get-Item $linkItem.FullName -Force).Target
-                if ($targetPath) {
-                    return $targetPath.StartsWith($ModPath)
+    if (-not $sampleFile) {
+        return $false
+    }
+
+    $relativePath = $sampleFile.FullName.Substring($ModPath.Length).TrimStart('\', '/')
+    $expectedPath = Join-Path -Path $GameDirectory -ChildPath $relativePath
+
+    # Check if the expected file path exists
+    if (-not (Test-Path -LiteralPath $expectedPath)) {
+        return $false
+    }
+
+    # Method 1: Check if the file itself is a symlink (file symlink case)
+    $fileItem = Get-Item -LiteralPath $expectedPath -Force
+    if ($fileItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+        $targetPath = $fileItem.Target
+        if ($targetPath -and $targetPath.StartsWith($ModPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $true
+        }
+    }
+
+    # Method 2: Check if any parent directory is a symlink pointing to our mod (directory symlink case)
+    $currentPath = $expectedPath
+    while ($currentPath -and $currentPath.Length -gt $GameDirectory.Length) {
+        $parentPath = Split-Path -Path $currentPath -Parent
+        if (-not $parentPath -or $parentPath.Length -lt $GameDirectory.Length) {
+            break
+        }
+
+        $parentItem = Get-Item -LiteralPath $parentPath -Force -ErrorAction SilentlyContinue
+        if ($parentItem -and ($parentItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+            $parentTarget = $parentItem.Target
+            if ($parentTarget) {
+                # Check if this symlinked directory is part of our mod
+                if ($parentTarget.StartsWith($ModPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    return $true
+                }
+                # Also check if our mod path starts with the target (for deeper nesting)
+                if ($ModPath.StartsWith($parentTarget, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    return $true
                 }
             }
         }
+        $currentPath = $parentPath
     }
+
     return $false
 }
 
@@ -255,20 +303,26 @@ function Remove-Links-Directly {
             return
         }
 
-        $symlinkPaths = Get-ChildItem -Recurse -Force -LiteralPath $GameDirectory -ErrorAction SilentlyContinue | 
-            Where-Object { $_.Attributes -band [System.IO.FileAttributes]::ReparsePoint } | 
-            Select-Object -ExpandProperty FullName
+        # Find all symlinks (files and directories)
+        $symlinks = Get-ChildItem -Recurse -Force -LiteralPath $GameDirectory -ErrorAction SilentlyContinue | 
+            Where-Object { $_.Attributes -band [System.IO.FileAttributes]::ReparsePoint }
 
-        foreach ($symlinkPath in $symlinkPaths) {
+        foreach ($symlink in $symlinks) {
             try {
-                $relativePath = $symlinkPath.Substring($GameDirectory.Length).TrimStart('\', '/')
-                $sourceFilePath = Join-Path -Path $ModSourcePath -ChildPath $relativePath
-
-                if (Test-Path -LiteralPath $sourceFilePath) {
-                    Remove-SymbolicLink -Path $symlinkPath
+                $target = $symlink.Target
+                
+                # Check if this symlink points to somewhere within our mod source
+                if ($target -and $target.StartsWith($ModSourcePath, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    if ($symlink.PSIsContainer) {
+                        # Directory symlink - remove with rmdir (doesn't delete target contents)
+                        cmd /c "rmdir `"$($symlink.FullName)`"" 2>&1 | Out-Null
+                    } else {
+                        # File symlink
+                        Remove-SymbolicLink -Path $symlink.FullName
+                    }
                 }
             } catch {
-                Write-Verbose "Could not remove symlink: $symlinkPath - $_"
+                Write-Verbose "Could not remove symlink: $($symlink.FullName) - $_"
             }
         }
     } catch {
@@ -288,52 +342,97 @@ function Install-Mod {
     )
 
     $backupDir = Join-Path -Path $BackupDirectory -ChildPath ("Backup-" + $ModName)
-    $files = Get-ChildItem -LiteralPath $ModSourcePath -Recurse -File
-    $totalFiles = $files.Count
-    $currentStep = 0
+    
+    # Count total files for progress bar
+    $allFiles = @(Get-ChildItem -LiteralPath $ModSourcePath -Recurse -File -Force)
+    $totalFiles = $allFiles.Count
+    $script:installFilesProcessed = 0
 
     if ($ProgressBar) {
         $ProgressBar.Minimum = 0
-        $ProgressBar.Maximum = $totalFiles
+        $ProgressBar.Maximum = [Math]::Max($totalFiles, 1)
+        $ProgressBar.Value = 0
     }
 
-    foreach ($file in $files) {
-        $currentStep++
-        if ($ProgressBar) {
-            $ProgressBar.Value = $currentStep
-            $ProgressBar.Refresh()
-        }
-
-        $relativePath = $file.FullName.Substring($ModSourcePath.Length).TrimStart('\', '/')
-        $targetFilePath = Join-Path -Path $GameDirectory -ChildPath $relativePath
-        $backupFilePath = Join-Path -Path $backupDir -ChildPath $relativePath
-
-        if (Test-Path -LiteralPath $targetFilePath) {
-            # Backup existing file
-            $backupDirPath = Split-Path -Path $backupFilePath -Parent
-            if (-not (Test-Path -LiteralPath $backupDirPath)) {
-                New-Item -ItemType Directory -Path $backupDirPath -Force | Out-Null
-            }
-
-            # Remove symbolic link if it exists
-            Remove-SymbolicLink -Path $targetFilePath
-
-            # Move file to backup
-            Move-File-With-Metadata -SourcePath $targetFilePath -DestinationPath $backupFilePath
-        }
-
-        # Ensure target directory exists
-        $targetDir = Split-Path -Path $targetFilePath -Parent
-        if (-not (Test-Path -LiteralPath $targetDir)) {
-            New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
-        }
-
-        # Create symbolic link
-        New-SymbolicLink -Path $targetFilePath -Target $file.FullName
-    }
+    # Recursive installation
+    Install-ModDirectory -SourceDir $ModSourcePath -DestDir $GameDirectory -BackupDir $backupDir -ProgressBar $ProgressBar
 
     if ($ProgressBar) {
         $ProgressBar.Value = 0
+    }
+}
+
+function Install-ModDirectory {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)][string]$SourceDir,
+        [Parameter(Mandatory = $true)][string]$DestDir,
+        [Parameter(Mandatory = $true)][string]$BackupDir,
+        [Parameter()][System.Windows.Forms.ProgressBar]$ProgressBar
+    )
+
+    $children = Get-ChildItem -LiteralPath $SourceDir -Force
+
+    foreach ($child in $children) {
+        $destPath = Join-Path -Path $DestDir -ChildPath $child.Name
+        $backupPath = Join-Path -Path $BackupDir -ChildPath $child.Name
+
+        if ($child.PSIsContainer) {
+            # It's a directory
+            if (-not (Test-Path -LiteralPath $destPath)) {
+                # Destination doesn't exist - symlink entire directory
+                # Ensure parent exists
+                $parentDir = Split-Path -Path $destPath -Parent
+                if (-not (Test-Path -LiteralPath $parentDir)) {
+                    [System.IO.Directory]::CreateDirectory($parentDir) | Out-Null
+                }
+                
+                New-DirectorySymlink -Path $destPath -Target $child.FullName
+                
+                # Update progress for all files in this directory
+                $filesInDir = @(Get-ChildItem -LiteralPath $child.FullName -Recurse -File -Force).Count
+                $script:installFilesProcessed += $filesInDir
+                if ($ProgressBar) {
+                    $ProgressBar.Value = [Math]::Min($script:installFilesProcessed, $ProgressBar.Maximum)
+                    $ProgressBar.Refresh()
+                }
+            } else {
+                # Destination exists - recurse
+                Install-ModDirectory -SourceDir $child.FullName -DestDir $destPath -BackupDir $backupPath -ProgressBar $ProgressBar
+            }
+        } else {
+            # It's a file
+            if (Test-Path -LiteralPath $destPath) {
+                # Check if it's already a symlink pointing to our source
+                $existingItem = Get-Item -LiteralPath $destPath -Force
+                if ($existingItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+                    # Remove existing symlink
+                    Remove-SymbolicLink -Path $destPath
+                } else {
+                    # Backup existing real file
+                    $backupFileDir = Split-Path -Path $backupPath -Parent
+                    if (-not (Test-Path -LiteralPath $backupFileDir)) {
+                        [System.IO.Directory]::CreateDirectory($backupFileDir) | Out-Null
+                    }
+                    Move-File-With-Metadata -SourcePath $destPath -DestinationPath $backupPath
+                }
+            }
+
+            # Ensure target directory exists
+            $targetDir = Split-Path -Path $destPath -Parent
+            if (-not (Test-Path -LiteralPath $targetDir)) {
+                [System.IO.Directory]::CreateDirectory($targetDir) | Out-Null
+            }
+
+            # Create file symlink
+            New-SymbolicLink -Path $destPath -Target $child.FullName
+
+            $script:installFilesProcessed++
+            if ($ProgressBar) {
+                $ProgressBar.Value = [Math]::Min($script:installFilesProcessed, $ProgressBar.Maximum)
+                $ProgressBar.Refresh()
+            }
+        }
     }
 }
 
