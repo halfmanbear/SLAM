@@ -215,10 +215,10 @@ function Read-Config {
         Get-Content -LiteralPath $ConfigFilePath | ForEach-Object {
             $_ = $_.Trim()
             if ($_.Length -gt 0 -and -not $_.StartsWith('#')) {
-                $parts = $_ -split '='
-                if ($parts.Length -eq 2) {
-                    $key = $parts[0].Trim()
-                    $value = $parts[1].Trim()
+                $separatorIndex = $_.IndexOf('=')
+                if ($separatorIndex -gt 0) {
+                    $key = $_.Substring(0, $separatorIndex).Trim()
+                    $value = $_.Substring($separatorIndex + 1).Trim()
                     $value = $value -replace "%USERPROFILE%", $env:USERPROFILE
                     $config[$key] = $value
                 }
@@ -378,6 +378,8 @@ function Install-ModDirectory {
         $backupPath = Join-Path -Path $BackupDir -ChildPath $child.Name
 
         if ($child.PSIsContainer) {
+            $filesInDir = @(Get-ChildItem -LiteralPath $child.FullName -Recurse -File -Force).Count
+
             # It's a directory
             if (-not (Test-Path -LiteralPath $destPath)) {
                 # Destination doesn't exist - symlink entire directory
@@ -390,14 +392,70 @@ function Install-ModDirectory {
                 New-DirectorySymlink -Path $destPath -Target $child.FullName
                 
                 # Update progress for all files in this directory
-                $filesInDir = @(Get-ChildItem -LiteralPath $child.FullName -Recurse -File -Force).Count
                 $script:installFilesProcessed += $filesInDir
                 if ($ProgressBar) {
                     $ProgressBar.Value = [Math]::Min($script:installFilesProcessed, $ProgressBar.Maximum)
                     $ProgressBar.Refresh()
                 }
             } else {
-                # Destination exists - recurse
+                $destItem = Get-Item -LiteralPath $destPath -Force -ErrorAction SilentlyContinue
+
+                # If destination is a SLAM-managed directory symlink, never recurse into it.
+                if ($destItem -and $destItem.PSIsContainer -and ($destItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+                    $destTarget = $destItem.Target
+                    if ($destTarget -is [array]) {
+                        $destTarget = $destTarget[0]
+                    }
+
+                    $resolvedDestTarget = $null
+                    if ($destTarget) {
+                        try {
+                            $resolvedDestTarget = (Resolve-Path -LiteralPath $destTarget -ErrorAction Stop).Path.TrimEnd('\', '/')
+                        } catch {
+                            $resolvedDestTarget = $destTarget.TrimEnd('\', '/')
+                        }
+                    }
+
+                    $resolvedChildPath = (Resolve-Path -LiteralPath $child.FullName -ErrorAction SilentlyContinue).Path
+                    if (-not $resolvedChildPath) {
+                        $resolvedChildPath = $child.FullName
+                    }
+                    $resolvedChildPath = $resolvedChildPath.TrimEnd('\', '/')
+
+                    $slamRoot = $null
+                    if ($script:scriptDir) {
+                        try {
+                            $slamRoot = (Resolve-Path -LiteralPath $script:scriptDir -ErrorAction Stop).Path.TrimEnd('\', '/')
+                        } catch {
+                            $slamRoot = $script:scriptDir.TrimEnd('\', '/')
+                        }
+                    }
+
+                    $isSlamManagedSymlink = $false
+                    if ($resolvedDestTarget -and $slamRoot) {
+                        $isSlamManagedSymlink = $resolvedDestTarget.StartsWith($slamRoot, [System.StringComparison]::OrdinalIgnoreCase)
+                    }
+
+                    if ($isSlamManagedSymlink) {
+                        $isSameTarget = $resolvedDestTarget.Equals($resolvedChildPath, [System.StringComparison]::OrdinalIgnoreCase)
+                        if (-not $isSameTarget) {
+                            cmd /c "rmdir `"$destPath`"" 2>&1 | Out-Null
+                            if ($LASTEXITCODE -ne 0) {
+                                throw "Failed to remove directory symlink: $destPath"
+                            }
+                            New-DirectorySymlink -Path $destPath -Target $child.FullName
+                        }
+
+                        $script:installFilesProcessed += $filesInDir
+                        if ($ProgressBar) {
+                            $ProgressBar.Value = [Math]::Min($script:installFilesProcessed, $ProgressBar.Maximum)
+                            $ProgressBar.Refresh()
+                        }
+                        continue
+                    }
+                }
+
+                # Destination exists (real directory or non-SLAM link) - recurse
                 Install-ModDirectory -SourceDir $child.FullName -DestDir $destPath -BackupDir $backupPath -ProgressBar $ProgressBar
             }
         } else {
@@ -1009,7 +1067,7 @@ function Initialize-GUI {
 
     $buttonCheckForUpdates.Add_Click({
         # 1. Show "checking" status and repaint UI
-        $labelStatus.Text = "Checking for updates…"
+        $labelStatus.Text = "Checking for updates..."
         [System.Windows.Forms.Application]::DoEvents()
 
         # 2. Make Git trust this folder (required for security)
@@ -1018,10 +1076,13 @@ function Initialize-GUI {
 
         # 3. Backup config.txt manually since it's .gitignored
         $configPath = Join-Path -Path $PSScriptRoot -ChildPath 'config.txt'
-        $configBackupPath = Join-Path -Path $PSScriptRoot -ChildPath 'config.txt.backup'
+        $configBackupPath = $null
         $configBackedUp = $false
+        $cleanupBackup = $true
+
         if (Test-Path -LiteralPath $configPath) {
             try {
+                $configBackupPath = Join-Path -Path $env:TEMP -ChildPath ("SLAM-config-" + [guid]::NewGuid().Guid + ".backup")
                 Copy-Item -LiteralPath $configPath -Destination $configBackupPath -Force -ErrorAction Stop
                 $configBackedUp = $true
             } catch {
@@ -1029,26 +1090,35 @@ function Initialize-GUI {
             }
         }
 
-        # 4. Fetch latest from origin/main
-        git -C $PSScriptRoot fetch origin main 2>&1 | Out-Null
-
-        # 5. Compare remote vs local HEAD
-        $remoteHash = git -C $PSScriptRoot rev-parse origin/main 2>&1
-        $localHash  = git -C $PSScriptRoot rev-parse HEAD        2>&1
-
-        if ($remoteHash -eq $localHash) {
-            # Nothing to do
-            $labelStatus.Text = "Already up to date."
-            [System.Windows.Forms.Application]::DoEvents()
-            # Clean up backup
-            if ($configBackedUp -and (Test-Path -LiteralPath $configBackupPath)) {
-                Remove-Item -LiteralPath $configBackupPath -Force -ErrorAction SilentlyContinue
+        try {
+            # 4. Fetch latest from origin/main
+            git -C $PSScriptRoot fetch origin main 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                throw "git fetch failed."
             }
-            return
-        }
 
-        # 6. Prompt user to proceed (warns SLAM will close)
-        $msg = @"
+            # 5. Compare remote vs local HEAD
+            $remoteHashOutput = git -C $PSScriptRoot rev-parse origin/main 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                throw "Could not read origin/main revision."
+            }
+            $localHashOutput = git -C $PSScriptRoot rev-parse HEAD 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                throw "Could not read local HEAD revision."
+            }
+
+            $remoteHash = [string]::Join("`n", @($remoteHashOutput)).Trim()
+            $localHash = [string]::Join("`n", @($localHashOutput)).Trim()
+
+            if ($remoteHash -eq $localHash) {
+                # Nothing to do
+                $labelStatus.Text = "Already up to date."
+                [System.Windows.Forms.Application]::DoEvents()
+                return
+            }
+
+            # 6. Prompt user to proceed (warns SLAM will close)
+            $msg = @"
     An update is available.
 
         Note: applying it will Close SLAM, requiring it to be manually ran again.
@@ -1056,44 +1126,57 @@ function Initialize-GUI {
     Proceed?
 "@
 
-        $resp = [System.Windows.Forms.MessageBox]::Show(
-            $msg,
-            "Update Available",
-            [System.Windows.Forms.MessageBoxButtons]::YesNo,
-            [System.Windows.Forms.MessageBoxIcon]::Warning
-        )
+            $resp = [System.Windows.Forms.MessageBox]::Show(
+                $msg,
+                "Update Available",
+                [System.Windows.Forms.MessageBoxButtons]::YesNo,
+                [System.Windows.Forms.MessageBoxIcon]::Warning
+            )
 
-        if ($resp -ne [System.Windows.Forms.DialogResult]::Yes) {
-            # User chose not to update
-            $labelStatus.Text = "Update canceled."
-            [System.Windows.Forms.Application]::DoEvents()
-            # Clean up backup
+            if ($resp -ne [System.Windows.Forms.DialogResult]::Yes) {
+                # User chose not to update
+                $labelStatus.Text = "Update canceled."
+                [System.Windows.Forms.Application]::DoEvents()
+                return
+            }
+
+            # 7. Reset to origin/main (this replaces both reset and pull)
+            git -C $PSScriptRoot reset --hard origin/main 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                throw "git reset --hard origin/main failed."
+            }
+
+            git -C $PSScriptRoot clean -fd 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                throw "git clean -fd failed."
+            }
+
+            # 8. Restore the user's config.txt from backup
             if ($configBackedUp -and (Test-Path -LiteralPath $configBackupPath)) {
+                Copy-Item -LiteralPath $configBackupPath -Destination $configPath -Force -ErrorAction Stop
+            }
+
+            # 9. Notify and exit so user can relaunch updated SLAM
+            $labelStatus.Text = "Update applied. Please restart SLAM."
+            [System.Windows.Forms.Application]::DoEvents()
+            Start-Sleep -Milliseconds 1000
+            $form.Close()
+        } catch {
+            $cleanupBackup = $false
+            $labelStatus.Text = "Update failed."
+            [System.Windows.Forms.Application]::DoEvents()
+
+            $errorText = "Update failed:`n$_"
+            if ($configBackedUp -and $configBackupPath -and (Test-Path -LiteralPath $configBackupPath)) {
+                $errorText += "`n`nYour config backup is still available at:`n$configBackupPath"
+            }
+            Show-CustomMessageBox -Text $errorText -Title "Update Error" -Buttons "OK"
+        } finally {
+            if ($cleanupBackup -and $configBackedUp -and $configBackupPath -and (Test-Path -LiteralPath $configBackupPath)) {
                 Remove-Item -LiteralPath $configBackupPath -Force -ErrorAction SilentlyContinue
             }
-            return
         }
-
-        # 7. Reset to origin/main (this replaces both reset and pull)
-        git -C $PSScriptRoot reset --hard origin/main 2>&1 | Out-Null
-        git -C $PSScriptRoot clean -fd               2>&1 | Out-Null
-
-        # 8. Restore the user's config.txt from backup
-        if ($configBackedUp -and (Test-Path -LiteralPath $configBackupPath)) {
-            try {
-                Move-Item -LiteralPath $configBackupPath -Destination $configPath -Force -ErrorAction Stop
-            } catch {
-                Write-Warning "Could not restore config.txt: $_"
-            }
-        }
-
-        # 9. Notify and exit so user can relaunch updated SLAM
-        $labelStatus.Text = "Update applied. Please restart SLAM."
-        [System.Windows.Forms.Application]::DoEvents()
-        Start-Sleep -Milliseconds 1000
-        $form.Close()
     })
-
     # DrawItem event handler for mods
     $listboxMods.Add_DrawItem({
         param($sender, $e)
@@ -1351,6 +1434,15 @@ function InstallModFromGUI {
             return
         }
 
+        if ([string]::IsNullOrWhiteSpace($gameDirectory)) {
+            Show-CustomMessageBox -Text "Game directory is not configured. Restart SLAM and complete the configuration prompts." -Title "Configuration Required" -Buttons "OK"
+            return
+        }
+        if (-not (Test-Path -LiteralPath $gameDirectory -PathType Container)) {
+            Show-CustomMessageBox -Text "Configured game directory not found:`n$gameDirectory`n`nUpdate your config.txt and try again." -Title "Invalid Configuration" -Buttons "OK"
+            return
+        }
+
         # Check for conflicts with already installed mods
         $installedMods = Get-Installed-Mods -GameDirectory $gameDirectory -ModParentPath $modParentPath
         $conflicts = Find-Mod-Conflicts-With-Installed -ModToInstall $modSourcePath -InstalledMods $installedMods -ModParentPath $modParentPath
@@ -1401,6 +1493,15 @@ function UninstallModFromGUI {
             $gameDirectory = $Config['SavedGamesDirectory']
         } else {
             Show-CustomMessageBox -Text "Invalid mod parent directory." -Title "Error" -Buttons "OK"
+            return
+        }
+
+        if ([string]::IsNullOrWhiteSpace($gameDirectory)) {
+            Show-CustomMessageBox -Text "Game directory is not configured. Restart SLAM and complete the configuration prompts." -Title "Configuration Required" -Buttons "OK"
+            return
+        }
+        if (-not (Test-Path -LiteralPath $gameDirectory -PathType Container)) {
+            Show-CustomMessageBox -Text "Configured game directory not found:`n$gameDirectory`n`nUpdate your config.txt and try again." -Title "Invalid Configuration" -Buttons "OK"
             return
         }
 
