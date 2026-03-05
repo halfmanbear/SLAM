@@ -62,6 +62,22 @@ begin
   end;
 end;
 
+procedure EnsureConfigFile(const InstallPath: String);
+var
+  ConfigPath: String;
+  ConfigContent: String;
+begin
+  ConfigPath := InstallPath + '\config.txt';
+  if not FileExists(ConfigPath) then
+  begin
+    ConfigContent := '# Configuration file for SLAM' + #13#10 +
+      'CoreGameDirectory=' + #13#10 +
+      'SavedGamesDirectory=' + #13#10;
+    if not SaveStringToFile(ConfigPath, ConfigContent, False) then
+      MsgBox('Could not create default config.txt in ' + InstallPath, mbError, MB_OK);
+  end;
+end;
+
 procedure CloneAndCopySLAM();
 var
   InstallPath, ClonePath: String;
@@ -79,6 +95,7 @@ begin
   ExecWithWait(GitExe, 'clone https://github.com/halfmanbear/SLAM.git "' + ClonePath + '"');
 
   ExecWithWait('cmd.exe', '/c xcopy "' + ClonePath + '\*" "' + InstallPath + '" /E /H /C /I /Y');
+  EnsureConfigFile(InstallPath);
 
   ExecWithWait(PS7Path, '-ExecutionPolicy Bypass -File "' + InstallPath + '\create-shortcut.ps1"');
 
