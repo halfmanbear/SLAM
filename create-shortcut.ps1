@@ -70,8 +70,13 @@ try {
     # Save the shortcut
     $Shortcut.Save()
 
+    # Set the "Run as administrator" flag on the shortcut.
+    $shortcutBytes = [System.IO.File]::ReadAllBytes($desktopPath)
+    $shortcutBytes[0x15] = $shortcutBytes[0x15] -bor 0x20
+    [System.IO.File]::WriteAllBytes($desktopPath, $shortcutBytes)
+
     Write-Host "Shortcut created on your desktop successfully!"
-    Write-Host "Note: You may need to run the shortcut as Administrator for symlink creation to work."
+    Write-Host "The shortcut has been configured to run as Administrator."
 } catch {
     Write-Host "An error occurred: $_"
 }
